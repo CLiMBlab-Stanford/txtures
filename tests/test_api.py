@@ -27,7 +27,7 @@ def fake_api(monkeypatch, fake_engine):  # noqa: F811
 
 def test_texts_as_strings_mappings_and_region_lists():
     report = read_texts(["The horse raced.", "It fell."])
-    assert [d.doc_id for d in report.corpus.documents] == ["1", "2"]
+    assert [d.document_id for d in report.corpus.documents] == ["1", "2"]
     report = read_texts({"a": ["New York", "is", "big."]})
     (document,) = report.corpus.documents
     assert document.text == "New York is big."
@@ -63,15 +63,15 @@ def test_compute_returns_the_table_and_reuses_items(fake_api):
         "fake_feature", ["The horse raced.", "It fell."], config={"fake_scores": {"scale": 2}}
     )
     assert list(table.columns) == [
-        "doc_id",
+        "document_id",
         "region_index",
-        "region",
+        "text",
         "char_start",
         "char_end",
         "length",
         "double",
     ]
-    assert list(table["region"]) == ["The", "horse", "raced.", "It", "fell."]
+    assert list(table["text"]) == ["The", "horse", "raced.", "It", "fell."]
     assert list(table["length"]) == [6.0, 10.0, 12.0, 4.0, 10.0]
     assert table["region_index"].dtype == "int64"
     assert CALLS["fake_scores"] == 2
@@ -129,7 +129,7 @@ def test_read_table_keeps_text_and_parses_features(tmp_path):
     directory = tmp_path / "table"
     write(
         directory / "x.tsv",
-        "doc_id\tregion_index\tregion\tchar_start\tchar_end\tnote\ts\tflag\n"
+        "document_id\tregion_index\ttext\tchar_start\tchar_end\tnote\ts\tflag\n"
         "007\t1\tNA\t0\t2\tnull\t1.5\tTRUE\n"
         "007\t2\tnull\t3\t7\tNA\tNA\tNA\n"
         "007\t3\tNone\t8\t12\t\t-Inf\tFALSE\n",
@@ -139,8 +139,8 @@ def test_read_table_keeps_text_and_parses_features(tmp_path):
         "column\tmodule\tfeature\tlabels\tvariant\ns\tm\ts\t\tv\nflag\tm\tflag\t\tv\n",
     )
     table = tx.read_table(directory)
-    assert list(table["doc_id"]) == ["007"] * 3
-    assert list(table["region"]) == ["NA", "null", "None"]
+    assert list(table["document_id"]) == ["007"] * 3
+    assert list(table["text"]) == ["NA", "null", "None"]
     assert list(table["note"]) == ["null", "NA", ""]
     assert table["s"][0] == 1.5 and math.isnan(table["s"][1]) and table["s"][2] == -np.inf
     assert list(table["flag"].astype(object).fillna("missing")) == [True, "missing", False]

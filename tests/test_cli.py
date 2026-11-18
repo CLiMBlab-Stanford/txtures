@@ -144,15 +144,19 @@ def test_inputs_list_reports_valid_invalid_and_ignored(capsys, tmp_path):
 
 def test_inputs_check_summarizes_or_fails(capsys, tmp_path):
     root = tmp_path / "inputs"
-    write(root / "r.tsv", "sentence_id\tregion\titem\n1\tThe horse\t7\n2\tfell.\t7\n")
-    write(root / "bad.tsv", "text\tregion\nx\ty\n")
+    write(
+        root / "r.tsv", "sentence_id\tregion_id\ttext\titem\n1\t1\tThe horse\t7\n2\t1\tfell.\t7\n"
+    )
+    write(root / "bad.tsv", "doc_id\tregion\nx\ty\n")
     assert main(["--inputs", str(root), "inputs", "check", "r"]) == 0
     out = capsys.readouterr().out
     assert "r: region-per-row" in out
     assert "sentences: 2" in out
     assert "metadata columns: item" in out
     assert main(["--inputs", str(root), "inputs", "check", "bad"]) == 1
-    assert "has both text and region columns" in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "column doc_id is now document_id" in out
+    assert "column region is now text" in out
 
 
 def test_inputs_check_unknown_name_is_an_error(capsys, tmp_path):

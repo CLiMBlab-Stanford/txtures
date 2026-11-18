@@ -60,7 +60,7 @@ def add_input(settings, text: str, name="doc.tsv") -> None:
     write(settings.inputs / name, text)
 
 
-DOCS = "doc_id\ttext\tcond\na\tThe horse raced.\tx\nb\tIt fell.\ty\nc\tThe end.\tz\n"
+DOCS = "document_id\ttext\tcond\na\tThe horse raced.\tx\nb\tIt fell.\ty\nc\tThe end.\tz\n"
 
 
 # Running and reuse
@@ -74,9 +74,9 @@ def test_run_writes_table_columns_and_manifest(env):
     assert directory.name == f"main-{plan.table_identity[:12]}"
     rows = read_table(directory)
     assert rows[0] == [
-        "doc_id",
+        "document_id",
         "region_index",
-        "region",
+        "text",
         "char_start",
         "char_end",
         "cond",
@@ -98,6 +98,34 @@ def test_run_writes_table_columns_and_manifest(env):
     assert CALLS["fake_scores"] == 3
     assert CALLS["build"] == 1
     assert executor.counts[plan.variants[0].identity].computed == 3
+
+
+def test_table_has_an_id_column_for_each_level_the_input_defines(env):
+    add_input(
+        env,
+        "document_id\tparagraph_id\tsentence_id\tregion_id\ttext\tcond\n"
+        "a\t1\t1\t2\thorse\tx\n"
+        "a\t1\t1\t1\tThe\tx\n"
+        "a\t2\t1\t1\tfell.\ty\n",
+    )
+    _, _, directory, _ = run(env)
+    rows = read_table(directory)
+    assert rows[0][:9] == [
+        "document_id",
+        "paragraph_id",
+        "sentence_id",
+        "region_id",
+        "region_index",
+        "text",
+        "char_start",
+        "char_end",
+        "cond",
+    ]
+    assert [row[:9] for row in rows[1:]] == [
+        ["a", "1", "1", "1", "1", "The", "0", "3", "x"],
+        ["a", "1", "1", "2", "2", "horse", "4", "9", "x"],
+        ["a", "2", "1", "1", "3", "fell.", "10", "15", "y"],
+    ]
 
 
 def test_second_run_is_a_no_op(env):

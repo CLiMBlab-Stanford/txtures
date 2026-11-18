@@ -2,10 +2,12 @@
 
 An input is a file in the inputs directory, addressed by its basename:
 
-- `NAME.tsv` with a `text` column: one document per row.
-- `NAME.tsv` with a `region` column: one region per row, grouped into
-  documents by `doc_id` and into sentences by `sentence_id`.
 - `NAME.txt`: one document per line.
+- `NAME.tsv`: a `text` column and optional ID columns `document_id`,
+  `section_id`, `paragraph_id`, `sentence_id`, and `region_id`, which nest in
+  that order. Each row is a region when a `region_id` column is present or
+  when two rows share every ID; otherwise each row is a unit of the innermost
+  level with an ID column, or a document when there is none.
 
 An optional `NAME.json` sidecar sets delimiters and joiners. TSV files are
 read strictly: tab-separated, UTF-8, first line a header, and no quote
@@ -25,20 +27,31 @@ from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
-from txtures.corpus import RESERVED_COLUMNS, Corpus, Document, Sentence
+from txtures.corpus import (
+    ID_COLUMNS,
+    LEVELS,
+    RESERVED_COLUMNS,
+    SEGMENT_LEVELS,
+    Corpus,
+    Document,
+    Segment,
+)
 from txtures.errors import InputError, Problem, TxturesError
 from txtures.identity import digest
 
 NAME_PATTERN = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.-]*")
 """Pattern for input basenames."""
 
-READER_VERSION = 1
+READER_VERSION = 2
 """Version of the reading rules. Increment it when the same file would read differently."""
 
 INPUT_SUFFIXES = (".tsv", ".txt")
 SIDECAR_SUFFIX = ".json"
 
 DOCUMENT_PER_ROW = "document-per-row"
+SECTION_PER_ROW = "section-per-row"
+PARAGRAPH_PER_ROW = "paragraph-per-row"
+SENTENCE_PER_ROW = "sentence-per-row"
 REGION_PER_ROW = "region-per-row"
 PLAIN_TEXT = "plain-text"
 
@@ -60,10 +73,16 @@ class InputSettings(BaseModel):
     sentence_joiner: str = " "
     """Whitespace placed between sentences in the text the model sees."""
 
+    paragraph_joiner: str = "\n"
+    """Whitespace placed between paragraphs in the text the model sees."""
+
+    section_joiner: str = "\n\n"
+    """Whitespace placed between sections in the text the model sees."""
+
     language: str | None = Field(default=None, min_length=1)
     """Language of the input, as an IETF language tag such as `en`."""
 
-    @field_validator("region_joiner", "sentence_joiner")
+    @field_validator("region_joiner", "sentence_joiner", "paragraph_joiner", "section_joiner")
     @classmethod
     def _joiner_is_whitespace(cls, value: str) -> str:
         if value and not value.isspace():
@@ -200,73 +219,113 @@ def _check_text(text: str, location: str, report: _Report) -> None:
 
 
 class _DocumentBuilder:
-    """Assembles one document's text and spans from regions."""
+    """Assembles one document's text and spans from regions.
+
+    Two regions are joined with the joiner of the outermost segment boundary
+    between them: section, paragraph, or sentence. Regions with no boundary
+    between them are joined with the region joiner.
+    """
 
     def __init__(self, settings: InputSettings):
         self.settings = settings
         self.parts: list[str] = []
         self.length = 0
+        # The parts that came from the input, excluding joiners.
+        self.content: list[str] = []
         self.regions: list[tuple[int, int]] = []
-        self.sentences: list[Sentence] = []
-        self._sentence_start: int | None = None
+        self.region_ids: list[str] = []
+        self.region_metadata: list[Mapping[str, str]] = []
+        self.starts: dict[str, list[tuple[str, int]]] = {level: [] for level in SEGMENT_LEVELS}
+        # The outermost level of segment opened since the last region, if any.
+        self._boundary: str | None = None
 
     def _append(self, text: str) -> None:
         self.parts.append(text)
         self.length += len(text)
 
-    def start_sentence(self, sentence_id: str | None) -> None:
-        if sentence_id is not None:
-            self.sentences.append(Sentence(sentence_id, len(self.regions), len(self.regions)))
-        self._sentence_start = len(self.regions)
-
-    def end_sentence(self) -> None:
-        if self.sentences:
-            last = self.sentences[-1]
-            self.sentences[-1] = Sentence(last.sentence_id, last.start, len(self.regions))
-
-    def add_region(self, text: str) -> None:
+    def _join(self) -> None:
         if self.regions:
-            first_in_sentence = self._sentence_start == len(self.regions)
-            joiner = (
-                self.settings.sentence_joiner
-                if first_in_sentence and self.sentences
-                else self.settings.region_joiner
-            )
-            self._append(joiner)
+            level = self._boundary or "region"
+            self._append(getattr(self.settings, f"{level}_joiner"))
+            self.content.append(" ")
+        self._boundary = None
+
+    def open(self, level: str, segment_id: str) -> None:
+        """Start a segment of `level` at the next region."""
+        self.starts[level].append((segment_id, len(self.regions)))
+        if self._boundary is None or LEVELS.index(level) < LEVELS.index(self._boundary):
+            self._boundary = level
+
+    def add_region(
+        self, text: str, region_id: str | None = None, metadata: Mapping[str, str] | None = None
+    ) -> None:
+        self._join()
         start = self.length
         self._append(text)
+        self.content.append(text)
         self.regions.append((start, self.length))
+        if region_id is not None:
+            self.region_ids.append(region_id)
+        if metadata is not None:
+            self.region_metadata.append(metadata)
 
-    def add_words(self, text: str) -> None:
+    def add_words(self, text: str, metadata: Mapping[str, str] | None = None) -> None:
         """Add a run of text whose regions are its whitespace-delimited words."""
-        if self.regions:
-            first_in_sentence = self._sentence_start == len(self.regions)
-            self._append(
-                self.settings.sentence_joiner
-                if first_in_sentence and self.sentences
-                else self.settings.region_joiner
-            )
+        self._join()
         offset = self.length
         self._append(text)
+        self.content.append(text)
         for match in re.finditer(r"\S+", text):
             self.regions.append((offset + match.start(), offset + match.end()))
+            if metadata is not None:
+                self.region_metadata.append(metadata)
 
-    def build(self, doc_id: str, **kwargs) -> Document:
+    def text(self) -> str:
+        return "".join(self.parts)
+
+    def input_text(self) -> str:
+        """The document's text from the input, with each joiner replaced by a space."""
+        return "".join(self.content)
+
+    def build(self, document_id: str) -> Document:
+        segments = {}
+        for level, starts in self.starts.items():
+            stops = [start for _, start in starts[1:]] + [len(self.regions)] * bool(starts)
+            segments[level] = tuple(
+                Segment(segment_id, start, stop)
+                for (segment_id, start), stop in zip(starts, stops, strict=True)
+            )
         return Document(
-            doc_id, "".join(self.parts), tuple(self.regions), tuple(self.sentences), **kwargs
+            document_id,
+            self.text(),
+            tuple(self.regions),
+            sentences=segments["sentence"],
+            paragraphs=segments["paragraph"],
+            sections=segments["section"],
+            region_ids=tuple(self.region_ids),
+            region_metadata=tuple(self.region_metadata),
         )
 
 
-def _split_document(
-    raw: str, settings: InputSettings, location: str, report: _Report
-) -> _DocumentBuilder | None:
-    """Divide one document's raw text into sentences and regions using the delimiters."""
-    builder = _DocumentBuilder(settings)
+def _split(
+    raw: str,
+    level: str,
+    builder: _DocumentBuilder,
+    location: str,
+    report: _Report,
+    metadata: Mapping[str, str] | None = None,
+) -> bool:
+    """Divide one `level` unit of raw text into sentences and regions using the delimiters.
+
+    The sentence delimiter applies only above sentence level. Returns whether
+    the text was valid; problems are added to `report`.
+    """
+    settings = builder.settings
     text = raw.strip()
     if not text:
-        report.error(location, "document is empty")
-        return None
-    if settings.sentence_delimiter is None:
+        report.error(location, f"{level} is empty")
+        return False
+    if settings.sentence_delimiter is None or level == "sentence":
         chunks: Sequence[tuple[str | None, str]] = [(None, text)]
     else:
         pieces = text.split(settings.sentence_delimiter)
@@ -277,27 +336,25 @@ def _split_document(
             report.error(location, f"sentence {sentence_id} is empty")
             ok = False
             continue
-        builder.start_sentence(sentence_id)
+        if sentence_id is not None:
+            builder.open("sentence", sentence_id)
         if settings.region_delimiter is None:
-            builder.add_words(chunk)
-        else:
-            for number, region in enumerate(chunk.split(settings.region_delimiter), start=1):
-                region = region.strip()
-                if not region:
-                    where = f"sentence {sentence_id}, " if sentence_id else ""
-                    report.error(location, f"{where}region {number} is empty")
-                    ok = False
-                    continue
-                if "\t" in region:
-                    where = f"sentence {sentence_id}, " if sentence_id else ""
-                    report.error(
-                        location, f"{where}region {number} contains a tab, which TSV cannot hold"
-                    )
-                    ok = False
-                    continue
-                builder.add_region(region)
-        builder.end_sentence()
-    return builder if ok else None
+            builder.add_words(chunk, metadata)
+            continue
+        where = f"sentence {sentence_id}, " if sentence_id else ""
+        for number, region in enumerate(chunk.split(settings.region_delimiter), start=1):
+            region = region.strip()
+            if not region:
+                report.error(location, f"{where}region {number} is empty")
+                ok = False
+            elif "\t" in region:
+                report.error(
+                    location, f"{where}region {number} contains a tab, which TSV cannot hold"
+                )
+                ok = False
+            else:
+                builder.add_region(region, metadata=metadata)
+    return ok
 
 
 def _read_lines(path: Path, report: _Report) -> list[str] | None:
@@ -322,11 +379,11 @@ def _read_plain_text(path: Path, settings: InputSettings, report: _Report):
     documents = []
     for number, line in enumerate(lines, start=1):
         location = f"{path}:{number}"
-        builder = _split_document(line, settings, location, report)
-        if builder is not None:
-            _check_text("".join(builder.parts), location, report)
+        builder = _DocumentBuilder(settings)
+        if _split(line, "document", builder, location, report):
+            _check_text(builder.input_text(), location, report)
             documents.append(builder.build(str(number)))
-    return documents, ()
+    return PLAIN_TEXT, documents, ()
 
 
 def _rows(path: Path, lines: list[str], report: _Report) -> Iterator[tuple[int, dict[str, str]]]:
@@ -349,6 +406,14 @@ def _rows(path: Path, lines: list[str], report: _Report) -> Iterator[tuple[int, 
         yield number, dict(zip(header, values, strict=True))
 
 
+RENAMED_COLUMNS = {
+    "doc_id": "column doc_id is now document_id",
+    "region": "column region is now text; rows are read as regions when their IDs repeat "
+    "or a region_id column is present",
+}
+"""Columns of earlier input formats, with the message that explains their replacement."""
+
+
 def _check_header(path: Path, header: list[str], report: _Report) -> bool:
     ok = True
     if len(set(header)) != len(header):
@@ -358,16 +423,18 @@ def _check_header(path: Path, header: list[str], report: _Report) -> bool:
     if any(not column for column in header):
         report.error(f"{path}:1", "has an empty column name")
         ok = False
-    if "text" in header and "region" in header:
-        report.error(f"{path}:1", "has both text and region columns; use one layout")
-        ok = False
-    elif "text" not in header and "region" not in header:
-        report.error(f"{path}:1", "needs a text column (one document per row) or a region column")
+    for column, message in RENAMED_COLUMNS.items():
+        if column in header:
+            report.error(f"{path}:1", message)
+            ok = False
+    if "text" not in header and "region" not in header:
+        report.error(f"{path}:1", "needs a text column")
         ok = False
     return ok
 
 
-def _metadata_columns(path: Path, header: list[str], used: set[str], report: _Report):
+def _metadata_columns(path: Path, header: list[str], report: _Report) -> tuple[str, ...]:
+    used = {"text", *ID_COLUMNS}
     columns = tuple(column for column in header if column not in used)
     for column in columns:
         if column in RESERVED_COLUMNS:
@@ -375,104 +442,144 @@ def _metadata_columns(path: Path, header: list[str], used: set[str], report: _Re
     return columns
 
 
-def _read_document_rows(path, lines, settings, report):
-    header = lines[0].split("\t")
-    metadata_columns = _metadata_columns(path, header, {"text", "doc_id"}, report)
-    documents = []
-    seen: dict[str, int] = {}
+INTEGER_ID = re.compile(r"-?[0-9]+")
+"""Pattern for section, paragraph, sentence, and region IDs."""
+
+
+@dataclass
+class _Row:
+    """One valid data row of a TSV input, with its IDs checked."""
+
+    number: int
+    document_id: str
+    ids: dict[str, str]
+    """The section, paragraph, sentence, and region IDs the file gives, as written."""
+    order: tuple[int, ...]
+    """The integer values of `ids`, outermost first, which order rows within a document."""
+    text: str
+    metadata: Mapping[str, str] | None
+
+
+def _describe(row: _Row, levels: Sequence[str]) -> str:
+    parts = [f"document {row.document_id!r}"]
+    parts += [f"{level} {row.ids[level]}" for level in levels if level in row.ids]
+    return ", ".join(parts)
+
+
+def _parse_rows(path, lines, levels, metadata_columns, report) -> list[_Row]:
+    """Read each data row's IDs, text, and metadata, dropping rows with invalid IDs.
+
+    Without any ID column, each row is its own document, numbered from 1.
+    With ID columns but no `document_id`, the file is one document, `1`.
+    """
+    rows = []
     for number, row in _rows(path, lines, report):
         location = f"{path}:{number}"
-        doc_id = row.get("doc_id", str(len(seen) + 1)).strip()
-        if not doc_id:
-            report.error(location, "doc_id is empty")
+        ids: dict[str, str] = {}
+        for level in levels:
+            column = f"{level}_id"
+            value = row[column].strip()
+            if not value:
+                report.error(location, f"{column} is empty")
+            elif level != "document" and not INTEGER_ID.fullmatch(value):
+                report.error(location, f"{column} {value!r} is not an integer")
+            else:
+                ids[level] = value
+        if len(ids) < len(levels):
             continue
-        if doc_id in seen:
-            report.error(location, f"doc_id {doc_id!r} repeats line {seen[doc_id]}")
-            continue
-        seen[doc_id] = number
-        builder = _split_document(row["text"], settings, location, report)
-        if builder is None:
-            continue
-        _check_text("".join(builder.parts), location, report)
+        document_id = ids.pop("document", "1") if levels else str(len(rows) + 1)
         metadata = {column: row[column] for column in metadata_columns}
-        documents.append(builder.build(doc_id, metadata=metadata))
-    return documents, metadata_columns
+        order = tuple(int(value) for value in ids.values())
+        rows.append(_Row(number, document_id, ids, order, row["text"], metadata or None))
+    return rows
 
 
-def _read_region_rows(path, lines, settings, report):
-    header = lines[0].split("\t")
-    for key in ("region_delimiter", "sentence_delimiter"):
-        if getattr(settings, key) is not None:
-            report.error(str(path), f"{key} does not apply to region-per-row inputs")
-    metadata_columns = _metadata_columns(path, header, {"region", "doc_id", "sentence_id"}, report)
-    has_sentences = "sentence_id" in header
+def _row_level(rows: Sequence[_Row], levels: Sequence[str]) -> str:
+    """Infer which level each row of the file holds.
 
-    groups: list[tuple[str, list[tuple[int, dict[str, str]]]]] = []
-    finished: dict[str, int] = {}
-    for number, row in _rows(path, lines, report):
-        doc_id = row.get("doc_id", "1").strip()
-        if not doc_id:
-            report.error(f"{path}:{number}", "doc_id is empty")
-            continue
-        if groups and groups[-1][0] == doc_id:
-            groups[-1][1].append((number, row))
-            continue
-        if doc_id in finished:
+    A `region_id` column, or two rows with the same IDs at every level the
+    file gives, means each row is a region. Otherwise each row is a unit of
+    the innermost level with an ID column, or a document when there is none.
+    """
+    if not levels:
+        return "document"
+    if "region" in levels:
+        return "region"
+    keys = [(row.document_id, row.order) for row in rows]
+    return "region" if len(set(keys)) < len(keys) else levels[-1]
+
+
+def _check_order(path, rows: Sequence[_Row], levels, has_region_ids, report) -> list[_Row]:
+    """Drop region rows whose position cannot be determined, reporting why.
+
+    With `region_id`, every region's full set of IDs must be unique. Without
+    it, the file order of a group's rows is their order, so each innermost
+    group's rows must be contiguous in the file.
+    """
+    kept = []
+    seen: dict[tuple, int] = {}
+    previous: tuple | None = None
+    for row in rows:
+        key = (row.document_id, row.order)
+        if has_region_ids and key in seen:
             report.error(
-                f"{path}:{number}",
-                f"doc_id {doc_id!r} resumes after other documents; its rows must be contiguous "
-                f"(it ended at line {finished[doc_id]})",
+                f"{path}:{row.number}", f"{_describe(row, levels)} repeats line {seen[key]}"
             )
             continue
-        if groups:
-            finished[groups[-1][0]] = groups[-1][1][-1][0]
-        groups.append((doc_id, [(number, row)]))
+        if not has_region_ids and key != previous and key in seen:
+            report.error(
+                f"{path}:{row.number}",
+                f"{_describe(row, levels)} resumes after other rows (it began at line "
+                f"{seen[key]}); without region_id, a group's rows must be contiguous",
+            )
+            continue
+        seen.setdefault(key, row.number)
+        previous = key
+        kept.append(row)
+    return kept
 
+
+def _read_table(path, lines, settings, report):
+    header = lines[0].split("\t")
+    levels = [level for level in LEVELS if f"{level}_id" in header]
+    metadata_columns = _metadata_columns(path, header, report)
+    rows = _parse_rows(path, lines, levels, metadata_columns, report)
+    row_level = _row_level(rows, levels)
+    if row_level == "region":
+        for key in ("region_delimiter", "sentence_delimiter"):
+            if getattr(settings, key) is not None:
+                report.error(str(path), f"{key} does not apply to region rows")
+        rows = _check_order(path, rows, levels, "region" in levels, report)
+    elif row_level == "sentence" and settings.sentence_delimiter is not None:
+        report.error(str(path), "sentence_delimiter does not apply to sentence rows")
+
+    by_document: dict[str, list[_Row]] = {}
+    for row in rows:
+        by_document.setdefault(row.document_id, []).append(row)
+    segment_levels = [level for level in SEGMENT_LEVELS if level in levels]
     documents = []
-    for doc_id, rows in groups:
+    for document_id, group in by_document.items():
         builder = _DocumentBuilder(settings)
-        region_metadata = []
-        current: str | None = None
-        closed: set[str] = set()
         ok = True
-        for number, row in rows:
-            location = f"{path}:{number}"
-            region = row["region"].strip()
-            if not region:
+        previous: tuple[int, ...] | None = None
+        for row in sorted(group, key=lambda row: row.order):
+            location = f"{path}:{row.number}"
+            for depth, level in enumerate(segment_levels, start=1):
+                if previous is None or row.order[:depth] != previous[:depth]:
+                    builder.open(level, row.ids[level])
+            previous = row.order
+            if row_level != "region":
+                ok = _split(row.text, row_level, builder, location, report, row.metadata) and ok
+            elif not row.text.strip():
                 report.error(location, "region is empty")
                 ok = False
-                continue
-            if has_sentences:
-                sentence_id = row["sentence_id"].strip()
-                if not sentence_id:
-                    report.error(location, "sentence_id is empty")
-                    ok = False
-                    continue
-                if sentence_id != current:
-                    if sentence_id in closed:
-                        report.error(
-                            location,
-                            f"sentence_id {sentence_id!r} resumes within document {doc_id!r}; "
-                            "its rows must be contiguous",
-                        )
-                        ok = False
-                        continue
-                    if current is not None:
-                        builder.end_sentence()
-                        closed.add(current)
-                    builder.start_sentence(sentence_id)
-                    current = sentence_id
-            elif current is None:
-                builder.start_sentence(None)
-                current = ""
-            builder.add_region(region)
-            region_metadata.append({column: row[column] for column in metadata_columns})
-        if has_sentences and current is not None:
-            builder.end_sentence()
-        if ok and builder.regions:
-            _check_text("".join(builder.parts), f"{path}: document {doc_id}", report)
-            documents.append(builder.build(doc_id, region_metadata=tuple(region_metadata)))
-    return documents, metadata_columns
+            else:
+                builder.add_region(row.text.strip(), row.ids.get("region"), row.metadata)
+        if ok:
+            where = location if len(group) == 1 else f"{path}: document {document_id}"
+            _check_text(builder.input_text(), where, report)
+            documents.append(builder.build(document_id))
+    return f"{row_level}-per-row", documents, metadata_columns
 
 
 def read_input(entry: InputFile) -> InputReport:
@@ -485,31 +592,23 @@ def read_input(entry: InputFile) -> InputReport:
     if settings is None:
         return InputReport(entry.name, None, tuple(report.problems), tuple(report.warnings))
 
+    result: tuple[str, list[Document], tuple[str, ...]] | None = None
     if entry.path.suffix == ".txt":
-        layout = PLAIN_TEXT
         result = _read_plain_text(entry.path, settings, report)
     else:
         lines = _read_lines(entry.path, report)
-        result = None
-        layout = DOCUMENT_PER_ROW
         if lines is not None:
             if not lines:
                 report.error(str(entry.path), "is empty; the first line must be a header")
-            else:
-                header = lines[0].split("\t")
-                if _check_header(entry.path, header, report):
-                    if "region" in header:
-                        layout = REGION_PER_ROW
-                        result = _read_region_rows(entry.path, lines, settings, report)
-                    else:
-                        result = _read_document_rows(entry.path, lines, settings, report)
+            elif _check_header(entry.path, lines[0].split("\t"), report):
+                result = _read_table(entry.path, lines, settings, report)
 
-    if result is not None and not result[0] and not report.problems:
+    if result is not None and not result[1] and not report.problems:
         report.error(str(entry.path), "contains no documents")
     if report.problems or result is None:
         return InputReport(entry.name, None, tuple(report.problems), tuple(report.warnings))
 
-    documents, metadata_columns = result
+    layout, documents, metadata_columns = result
     file_digest = hashlib.sha256(entry.path.read_bytes()).hexdigest()
     corpus = Corpus(
         name=entry.name,
@@ -566,30 +665,31 @@ def read_texts(
     if isinstance(texts, str):
         entries: list[tuple[str, object]] = [("1", texts)]
     elif isinstance(texts, Mapping):
-        entries = [(str(doc_id), value) for doc_id, value in texts.items()]
+        entries = [(str(document_id), value) for document_id, value in texts.items()]
     else:
         entries = [(str(number), value) for number, value in enumerate(texts, start=1)]
     documents = []
     seen: set[str] = set()
-    for doc_id, value in entries:
-        location = f"document {doc_id}"
-        if not doc_id.strip() or any(char in doc_id for char in "\t\n\r"):
+    for document_id, value in entries:
+        location = f"document {document_id}"
+        if not document_id.strip() or any(char in document_id for char in "\t\n\r"):
             report.error(location, "document IDs must be non-empty and contain no tabs or breaks")
             continue
-        if doc_id in seen:
+        if document_id in seen:
             report.error(location, "document ID repeats")
             continue
-        seen.add(doc_id)
+        seen.add(document_id)
+        builder = _DocumentBuilder(settings)
         if isinstance(value, str):
-            builder = _split_document(value, settings, location, report)
+            ok = _split(value, "document", builder, location, report)
         elif isinstance(value, Sequence) and all(isinstance(region, str) for region in value):
-            builder = _region_list(value, settings, location, report)
+            ok = _region_list(value, builder, location, report)
         else:
             report.error(location, "must be a string or a sequence of region strings")
             continue
-        if builder is not None:
-            _check_text("".join(builder.parts), location, report)
-            documents.append(builder.build(doc_id))
+        if ok:
+            _check_text(builder.input_text(), location, report)
+            documents.append(builder.build(document_id))
     if not entries:
         report.error(name, "contains no documents")
     if report.problems:
@@ -602,7 +702,7 @@ def read_texts(
         digest=digest(
             {
                 "reader": READER_VERSION,
-                "documents": [[d.doc_id, d.digest] for d in documents],
+                "documents": [[d.document_id, d.digest] for d in documents],
                 "settings": settings.model_dump(mode="json"),
             }
         ),
@@ -611,10 +711,8 @@ def read_texts(
 
 
 def _region_list(
-    regions: Sequence[str], settings: InputSettings, location: str, report: _Report
-) -> _DocumentBuilder | None:
-    builder = _DocumentBuilder(settings)
-    builder.start_sentence(None)
+    regions: Sequence[str], builder: _DocumentBuilder, location: str, report: _Report
+) -> bool:
     ok = bool(regions)
     if not regions:
         report.error(location, "document is empty")
@@ -625,4 +723,4 @@ def _region_list(
             ok = False
             continue
         builder.add_region(region)
-    return builder if ok else None
+    return ok

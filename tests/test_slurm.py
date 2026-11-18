@@ -230,7 +230,7 @@ def test_real_slurm_job(tmp_path):
         write(root / "definitions" / "configs" / "lm_scores" / "toy.yml", f"model: {model}\n")
         write(root / "definitions" / "workflows" / "toy.yml", "lm_scores: toy\nsurprisal: main\n")
         rows = "".join(f"{n}\tab ba b a\n" if n % 2 else f"{n}\tb ab\n" for n in range(6))
-        write(root / "inputs" / "doc.tsv", "doc_id\ttext\n" + rows)
+        write(root / "inputs" / "doc.tsv", "document_id\ttext\n" + rows)
         write(
             root / "home" / ".config" / "txtures" / "settings.yml",
             f"execution:\n  executor: slurm\n  device: cpu\nslurm:\n  partition: {partition}\n"

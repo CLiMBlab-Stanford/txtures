@@ -106,7 +106,7 @@ several, each column name adds the labels of the swept values in its lineage,
 upstream first, joined with `_`:
 
 ```text
-doc_id  region_index  region  char_start  char_end  surprisal_gpt2  surprisal_pythia70m
+document_id  region_index  text  char_start  char_end  surprisal_gpt2  surprisal_pythia70m
 ```
 
 A sweep with one value adds no label. Labels must match

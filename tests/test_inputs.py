@@ -5,10 +5,14 @@ import pytest
 from conftest import write
 
 from txtures.errors import InputError, TxturesError
+from txtures.identity import digest
 from txtures.inputs import (
     DOCUMENT_PER_ROW,
+    PARAGRAPH_PER_ROW,
     PLAIN_TEXT,
     REGION_PER_ROW,
+    SECTION_PER_ROW,
+    SENTENCE_PER_ROW,
     load_input,
     scan_inputs,
 )
@@ -95,9 +99,9 @@ def test_plain_text_documents_are_lines_and_regions_are_words(inputs):
     result = corpus(inputs, "p")
     assert result.layout == PLAIN_TEXT
     first, second = result.documents
-    assert (first.doc_id, first.text) == ("1", "The horse  raced.")
+    assert (first.document_id, first.text) == ("1", "The horse  raced.")
     assert regions(first) == ["The", "horse", "raced."]
-    assert (second.doc_id, second.text, regions(second)) == ("2", "It fell.", ["It", "fell."])
+    assert (second.document_id, second.text, regions(second)) == ("2", "It fell.", ["It", "fell."])
     assert first.sentences == ()
 
 
@@ -112,7 +116,7 @@ def test_delimiters_define_regions_and_sentences(inputs):
     (document,) = corpus(inputs, "p").documents
     assert document.text == "The cat sat on the mat"
     assert regions(document) == ["The cat", "sat", "on the", "mat"]
-    assert [(s.sentence_id, s.start, s.stop) for s in document.sentences] == [
+    assert [(s.id, s.start, s.stop) for s in document.sentences] == [
         ("1", 0, 2),
         ("2", 2, 4),
     ]
@@ -174,44 +178,18 @@ def test_malformed_sidecar_json_is_rejected(inputs):
     assert "cannot read sidecar" in problems(inputs, "p")
 
 
-# Document per row
-
-
-def test_document_rows_keep_ids_metadata_and_quotes(inputs):
-    write(
-        inputs / "d.tsv",
-        tsv("doc_id\ttext\tcondition", 'a\tShe said "hi".\tx', "b\tThe end.\ty"),
-    )
-    result = corpus(inputs, "d")
-    assert result.layout == DOCUMENT_PER_ROW
-    assert result.metadata_columns == ("condition",)
-    first, second = result.documents
-    assert (first.doc_id, first.text, first.metadata) == ("a", 'She said "hi".', {"condition": "x"})
-    assert regions(first) == ["She", "said", '"hi".']
-    assert second.doc_id == "b"
-
-
-def test_document_rows_are_numbered_without_doc_id(inputs):
-    write(inputs / "d.tsv", tsv("text", "one", "two"))
-    assert [d.doc_id for d in corpus(inputs, "d").documents] == ["1", "2"]
-
-
-def test_repeated_doc_id_and_bad_rows_are_errors(inputs):
-    write(inputs / "d.tsv", tsv("doc_id\ttext", "a\tx", "a\ty", "b\tz\textra", "\tw"))
-    found = problems(inputs, "d")
-    assert "d.tsv:3: doc_id 'a' repeats line 2" in found
-    assert "d.tsv:4: has 3 fields; the header has 2" in found
-    assert "d.tsv:5: doc_id is empty" in found
+# TSV headers and rows
 
 
 @pytest.mark.parametrize(
     ("header", "message"),
     [
         ("text\ttext", "repeats column text"),
-        ("text\tregion", "has both text and region columns"),
         ("words", "needs a text column"),
         ("text\tregion_index", "column 'region_index' is reserved"),
         ("text\t", "has an empty column name"),
+        ("doc_id\ttext", "column doc_id is now document_id"),
+        ("region", "column region is now text"),
     ],
 )
 def test_invalid_headers_are_rejected(inputs, header, message):
@@ -237,18 +215,149 @@ def test_byte_order_mark_is_ignored(inputs):
     assert corpus(inputs, "d").documents[0].text == "hello"
 
 
+def test_bad_rows_and_ids_are_errors(inputs):
+    write(
+        inputs / "d.tsv",
+        tsv("document_id\tsentence_id\ttext", "a\t1\tx", "b\t1\tz\textra", "\t1\tw", "a\ts2\ty"),
+    )
+    found = problems(inputs, "d")
+    assert "d.tsv:3: has 4 fields; the header has 3" in found
+    assert "d.tsv:4: document_id is empty" in found
+    assert "d.tsv:5: sentence_id 's2' is not an integer" in found
+
+
+# Document per row
+
+
+def test_document_rows_keep_ids_metadata_and_quotes(inputs):
+    write(
+        inputs / "d.tsv",
+        tsv("document_id\ttext\tcondition", 'a\tShe said "hi".\tx', "b\tThe end.\ty"),
+    )
+    result = corpus(inputs, "d")
+    assert result.layout == DOCUMENT_PER_ROW
+    assert result.metadata_columns == ("condition",)
+    first, second = result.documents
+    assert (first.document_id, first.text) == ("a", 'She said "hi".')
+    assert regions(first) == ["She", "said", '"hi".']
+    assert first.region_metadata == ({"condition": "x"},) * 3
+    assert second.document_id == "b"
+
+
+def test_document_rows_are_numbered_without_any_id_column(inputs):
+    write(inputs / "d.tsv", tsv("text", "one", "two"))
+    result = corpus(inputs, "d")
+    assert result.layout == DOCUMENT_PER_ROW
+    assert [d.document_id for d in result.documents] == ["1", "2"]
+    assert result.documents[0].region_metadata == ()
+
+
+# Sentence, paragraph, and section per row
+
+
+def test_sentence_rows_are_split_into_words_and_sorted_by_id(inputs):
+    write(
+        inputs / "s.tsv",
+        tsv(
+            "document_id\tsentence_id\ttext\tcond",
+            "a\t2\tIt fell.\tx",
+            "b\t1\tHello there.\ty",
+            "a\t10\tThe end.\tz",
+            "a\t1\tThe horse raced.\tw",
+        ),
+    )
+    result = corpus(inputs, "s")
+    assert result.layout == SENTENCE_PER_ROW
+    first, second = result.documents
+    assert first.document_id == "a"
+    assert first.text == "The horse raced. It fell. The end."
+    assert [(s.id, s.start, s.stop) for s in first.sentences] == [
+        ("1", 0, 3),
+        ("2", 3, 5),
+        ("10", 5, 7),
+    ]
+    assert [m["cond"] for m in first.region_metadata] == ["w"] * 3 + ["x"] * 2 + ["z"] * 2
+    assert (second.document_id, second.text) == ("b", "Hello there.")
+
+
+def test_sentence_rows_take_the_region_delimiter_but_not_the_sentence_delimiter(inputs):
+    write(inputs / "s.tsv", tsv("sentence_id\ttext", "1\tThe horse | raced", "2\tfell."))
+    sidecar(inputs, "s", region_delimiter="|")
+    (document,) = corpus(inputs, "s").documents
+    assert regions(document) == ["The horse", "raced", "fell."]
+    sidecar(inputs, "s", sentence_delimiter="|")
+    assert "sentence_delimiter does not apply to sentence rows" in problems(inputs, "s")
+
+
+def test_paragraph_rows_are_split_into_sentences_numbered_within_each(inputs):
+    write(
+        inputs / "p.tsv",
+        tsv(
+            "section_id\tparagraph_id\ttext",
+            "1\t1\tOne. // Two.",
+            "1\t2\tThree.",
+            "2\t1\tFour. // Five.",
+        ),
+    )
+    sidecar(inputs, "p", sentence_delimiter="//")
+    result = corpus(inputs, "p")
+    assert result.layout == PARAGRAPH_PER_ROW
+    (document,) = result.documents
+    assert document.document_id == "1"
+    assert document.text == "One. Two.\nThree.\n\nFour. Five."
+    assert [(s.id, s.start, s.stop) for s in document.sections] == [("1", 0, 3), ("2", 3, 5)]
+    assert [(s.id, s.start, s.stop) for s in document.paragraphs] == [
+        ("1", 0, 2),
+        ("2", 2, 3),
+        ("1", 3, 5),
+    ]
+    assert [s.id for s in document.sentences] == ["1", "2", "1", "1", "2"]
+
+
+def test_the_outermost_boundary_between_regions_chooses_the_joiner(inputs):
+    write(
+        inputs / "j.tsv",
+        tsv(
+            "section_id\tparagraph_id\tsentence_id\ttext",
+            "1\t1\t1\ta b",
+            "1\t1\t2\tc",
+            "1\t2\t1\td",
+            "2\t1\t1\te",
+        ),
+    )
+    joiners = {"sentence_joiner": " ", "paragraph_joiner": "\n"}
+    sidecar(inputs, "j", **joiners, section_joiner="\n\n")
+    (document,) = corpus(inputs, "j").documents
+    assert document.text == "a b c\nd\n\ne"
+    assert regions(document) == ["a", "b", "c", "d", "e"]
+    assert warnings(inputs, "j") == ""
+    sidecar(inputs, "j", section_joiner="-")
+    assert "section_joiner: Value error, must be empty or contain only whitespace" in problems(
+        inputs, "j"
+    )
+
+
+def test_section_rows(inputs):
+    write(inputs / "s.tsv", tsv("document_id\tsection_id\ttext", "a\t1\tx y", "a\t2\tz"))
+    result = corpus(inputs, "s")
+    assert result.layout == SECTION_PER_ROW
+    (document,) = result.documents
+    assert [(s.start, s.stop) for s in document.sections] == [(0, 2), (2, 3)]
+    assert document.sentences == document.paragraphs == ()
+
+
 # Region per row
 
 
-def test_region_rows_group_into_documents_and_sentences(inputs):
+def test_repeated_ids_make_rows_regions_in_file_order(inputs):
     write(
         inputs / "r.tsv",
         tsv(
-            "doc_id\tsentence_id\tregion\titem",
-            "d1\ts1\tThe horse\t1",
-            "d1\ts1\traced past\t1",
-            "d1\ts2\tIt fell.\t1",
-            "d2\ts1\tHello\t2",
+            "document_id\tsentence_id\ttext\titem",
+            "d1\t2\tIt fell.\t1",
+            "d1\t1\tThe horse\t1",
+            "d1\t1\traced past\t1",
+            "d2\t1\tHello\t2",
         ),
     )
     result = corpus(inputs, "r")
@@ -256,37 +365,90 @@ def test_region_rows_group_into_documents_and_sentences(inputs):
     first, second = result.documents
     assert first.text == "The horse raced past It fell."
     assert regions(first) == ["The horse", "raced past", "It fell."]
-    assert [(s.sentence_id, s.start, s.stop) for s in first.sentences] == [
-        ("s1", 0, 2),
-        ("s2", 2, 3),
-    ]
+    assert [(s.id, s.start, s.stop) for s in first.sentences] == [("1", 0, 2), ("2", 2, 3)]
+    assert first.region_ids == ()
     assert first.region_metadata == ({"item": "1"},) * 3
-    assert (second.doc_id, second.text) == ("d2", "Hello")
+    assert (second.document_id, second.text) == ("d2", "Hello")
 
 
-def test_region_rows_without_doc_id_form_one_document(inputs):
-    write(inputs / "r.tsv", tsv("region", "a", "b"))
-    (document,) = corpus(inputs, "r").documents
-    assert (document.doc_id, document.text, document.sentences) == ("1", "a b", ())
+def test_words_per_row_with_only_document_ids(inputs):
+    write(inputs / "w.tsv", tsv("document_id\ttext", "a\tThe", "a\tcat", "b\tHi"))
+    result = corpus(inputs, "w")
+    assert result.layout == REGION_PER_ROW
+    assert [(d.document_id, d.text, d.sentences) for d in result.documents] == [
+        ("a", "The cat", ()),
+        ("b", "Hi", ()),
+    ]
 
 
-def test_region_rows_must_be_contiguous(inputs):
+def test_region_ids_sort_regions_and_need_no_repeats(inputs):
     write(
         inputs / "r.tsv",
-        tsv("doc_id\tsentence_id\tregion", "a\t1\tx", "b\t1\ty", "a\t2\tz", "b\t2\tw", "b\t1\tv"),
+        tsv(
+            "document_id\tsentence_id\tregion_id\ttext",
+            "a\t2\t1\tfell.",
+            "a\t1\t10\tbarn",
+            "a\t1\t2\traced",
+            "a\t1\t1\tThe horse",
+        ),
     )
-    found = problems(inputs, "r")
-    assert "r.tsv:4: doc_id 'a' resumes after other documents" in found
-    assert "r.tsv:6: sentence_id '1' resumes within document 'b'" in found
+    result = corpus(inputs, "r")
+    assert result.layout == REGION_PER_ROW
+    (document,) = result.documents
+    assert regions(document) == ["The horse", "raced", "barn", "fell."]
+    assert document.region_ids == ("1", "2", "10", "1")
+    assert [(s.id, s.start, s.stop) for s in document.sentences] == [("1", 0, 3), ("2", 3, 4)]
 
 
-def test_region_rows_reject_delimiters_and_empty_values(inputs):
-    write(inputs / "r.tsv", tsv("sentence_id\tregion", "1\t", "\tx"))
+def test_ids_are_nested_within_their_parents(inputs):
+    write(
+        inputs / "r.tsv",
+        tsv(
+            "document_id\tparagraph_id\tsentence_id\ttext",
+            "a\t1\t1\tx",
+            "a\t1\t1\ty",
+            "a\t2\t1\tz",
+            "b\t1\t1\tw",
+        ),
+    )
+    first, second = corpus(inputs, "r").documents
+    assert [(s.id, s.start, s.stop) for s in first.sentences] == [("1", 0, 2), ("1", 2, 3)]
+    assert [(p.id, p.start, p.stop) for p in first.paragraphs] == [("1", 0, 2), ("2", 2, 3)]
+    assert second.text == "w"
+
+
+def test_region_rows_without_document_id_form_one_document(inputs):
+    write(inputs / "r.tsv", tsv("region_id\ttext", "2\tb", "1\ta"))
+    (document,) = corpus(inputs, "r").documents
+    assert (document.document_id, document.text, document.sentences) == ("1", "a b", ())
+
+
+def test_region_rows_without_region_id_must_be_contiguous(inputs):
+    write(
+        inputs / "r.tsv",
+        tsv("document_id\tsentence_id\ttext", "a\t1\tx", "b\t1\ty", "a\t1\tz", "a\t2\tw"),
+    )
+    assert "r.tsv:4: document 'a', sentence 1 resumes after other rows (it began at line 2)" in (
+        problems(inputs, "r")
+    )
+
+
+def test_non_contiguous_rows_are_fine_with_region_ids_but_repeats_are_not(inputs):
+    write(
+        inputs / "r.tsv",
+        tsv("document_id\tregion_id\ttext", "a\t2\ty", "b\t1\tz", "a\t1\tx"),
+    )
+    assert [d.text for d in corpus(inputs, "r").documents] == ["x y", "z"]
+    write(inputs / "r.tsv", tsv("document_id\tregion_id\ttext", "a\t1\tx", "a\t01\ty"))
+    assert "r.tsv:3: document 'a', region 01 repeats line 2" in problems(inputs, "r")
+
+
+def test_region_rows_reject_delimiters_and_empty_regions(inputs):
+    write(inputs / "r.tsv", tsv("sentence_id\ttext", "1\t", "1\tx"))
     sidecar(inputs, "r", region_delimiter="|")
     found = problems(inputs, "r")
-    assert "region_delimiter does not apply to region-per-row inputs" in found
+    assert "region_delimiter does not apply to region rows" in found
     assert "r.tsv:2: region is empty" in found
-    assert "r.tsv:3: sentence_id is empty" in found
 
 
 # Warnings and identity
@@ -312,9 +474,9 @@ def test_input_digest_covers_file_and_sidecar(inputs):
 
 
 def test_document_digest_ignores_ids_and_metadata(inputs):
-    write(inputs / "a.tsv", tsv("doc_id\ttext\tc", "x\tsame text\t1"))
-    write(inputs / "b.tsv", tsv("doc_id\ttext\tc", "y\tsame text\t2"))
-    write(inputs / "c.tsv", tsv("doc_id\ttext\tc", "x\tother text\t1"))
+    write(inputs / "a.tsv", tsv("document_id\ttext\tc", "x\tsame text\t1"))
+    write(inputs / "b.tsv", tsv("document_id\ttext\tc", "y\tsame text\t2"))
+    write(inputs / "c.tsv", tsv("document_id\ttext\tc", "x\tother text\t1"))
     a, b, c = (corpus(inputs, name).documents[0] for name in "abc")
     assert a.digest == b.digest
     assert a.digest != c.digest
@@ -324,3 +486,13 @@ def test_delimited_region_with_a_tab_is_rejected(inputs):
     write(inputs / "p.txt", "a\tb|c\n")
     sidecar(inputs, "p", region_delimiter="|")
     assert "region 1 contains a tab" in problems(inputs, "p")
+
+
+def test_document_digest_includes_only_the_levels_a_document_defines(inputs):
+    write(inputs / "a.tsv", tsv("sentence_id\ttext", "1\tx y", "2\tz"))
+    write(inputs / "b.tsv", tsv("paragraph_id\tsentence_id\ttext", "1\t1\tx y", "1\t2\tz"))
+    a, b = (corpus(inputs, name).documents[0] for name in "ab")
+    assert a.digest == digest(
+        {"text": "x y z", "regions": [[0, 1], [2, 3], [4, 5]], "sentences": [[0, 2], [2, 3]]}
+    )
+    assert b.digest != a.digest
