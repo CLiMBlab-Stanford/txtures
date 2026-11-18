@@ -34,9 +34,7 @@ def env(tmp_path: Path):
     }
     (tmp_path / "definitions").mkdir()
     (tmp_path / "inputs").mkdir()
-    settings = resolve_settings(
-        locations, env={}, home=tmp_path / "home", lab_root=tmp_path / "no-lab"
-    )
+    settings = resolve_settings(locations, env={}, home=tmp_path / "home")
     return settings
 
 

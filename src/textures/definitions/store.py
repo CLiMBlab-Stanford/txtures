@@ -176,7 +176,9 @@ This store holds textures site settings and scientific definitions.
 - `configs/MODULE/ID.yml`: configs for one module.
 - `workflows/ID.yml`: workflows, which select a config for each module.
 
-Run `textures def validate` after editing.
+Run `textures def validate` after editing. Each user selects this store
+once with `textures site use PATH`, and its site settings then choose the
+shared locations.
 """
 
 

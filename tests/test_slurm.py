@@ -110,7 +110,7 @@ def test_a_shard_computes_its_own_items_first(tmp_path):
     locations["resources"] = str(tmp_path / "resources")
     locations["definitions"] = str(tmp_path / "definitions")
     (tmp_path / "definitions").mkdir()
-    settings = resolve_settings(locations, env={}, home=tmp_path, lab_root=tmp_path / "x")
+    settings = resolve_settings(locations, env={}, home=tmp_path)
     add_input(settings, DOCS)
     fake_modules.reset()
     plan = plan_request(settings, definitions(settings), "doc")

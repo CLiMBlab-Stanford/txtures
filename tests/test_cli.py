@@ -30,8 +30,8 @@ def test_no_arguments_prints_help(capsys):
     assert "usage: textures" in capsys.readouterr().out
 
 
-def test_site_show_reports_sources(capsys, tmp_path):
-    assert main(["--items", str(tmp_path / "items"), "site", "show", "--json"]) == 0
+def test_site_ls_reports_values_sources_and_meanings(capsys, tmp_path):
+    assert main(["--items", str(tmp_path / "items"), "site", "ls", "--json"]) == 0
     payload = json.loads(capsys.readouterr().out)
     assert payload["installation"] is None
     rows = {row["key"]: row for row in payload["settings"]}
@@ -39,10 +39,65 @@ def test_site_show_reports_sources(capsys, tmp_path):
         "key": "items",
         "value": str(tmp_path / "items"),
         "source": "command line",
+        "description": "store of per-document results",
     }
     assert rows["definitions"]["source"] == "environment (TEXTURES_DEFINITIONS)"
-    assert rows["resources"]["source"] == "default"
-    assert rows["execution.executor"]["value"] == "local"
+    assert rows["resources"] == {
+        "key": "resources",
+        "value": str(tmp_path / "home" / "textures-resources"),
+        "source": "default",
+        "description": "models and the Hugging Face cache",
+    }
+    assert main(["site", "show"]) == 0
+    out = capsys.readouterr().out
+    assert "slurm.partition" in out and "partition to submit to" in out
+
+
+def test_site_set_unset_and_use(capsys, tmp_path, monkeypatch):
+    personal = tmp_path / "home" / ".config" / "textures" / "settings.yml"
+    assert main(["site", "set", "slurm.partition", "gpu"]) == 0
+    assert main(["site", "set", "slurm.options", "--", "--exclude=n1", "--qos=low"]) == 0
+    assert main(["site", "set", "items", "rel/items"]) == 0
+    out = capsys.readouterr().out
+    assert f"items is now {Path.cwd() / 'rel' / 'items'} (personal settings" in out
+    assert "slurm:\n  partition: gpu\n  options:\n  - --exclude=n1\n" in personal.read_text()
+
+    assert main(["site", "set", "slurm.gpus", "-1"]) == 1
+    assert "non-negative integer" in capsys.readouterr().err
+    assert main(["site", "set", "colour", "blue"]) == 1
+    assert "see `textures site ls`" in capsys.readouterr().err
+
+    assert main(["site", "unset", "slurm.partition"]) == 0
+    assert "slurm.partition is now (unset) (default)" in capsys.readouterr().out
+    assert "partition" not in personal.read_text()
+
+    # The environment outranks personal settings, and the command says so.
+    assert main(["site", "set", "definitions", str(tmp_path)]) == 0
+    assert "TEXTURES_DEFINITIONS" in capsys.readouterr().err
+
+    monkeypatch.delenv("TEXTURES_DEFINITIONS")
+    assert main(["site", "unset", "items"]) == 0
+    store = tmp_path / "lab-definitions"
+    write(store / "site" / "site.yml", f"items: {tmp_path / 'lab' / 'items'}\n")
+    assert main(["site", "use", str(store)]) == 0
+    out = capsys.readouterr().out
+    assert f"items: {tmp_path / 'lab' / 'items'} (site settings" in out
+    assert main(["site", "use", str(tmp_path / "missing")]) == 1
+
+
+def test_default_locations_draw_one_note(capsys, monkeypatch, tmp_path):
+    from textures import cli
+
+    monkeypatch.delenv("TEXTURES_DEFINITIONS")
+    monkeypatch.setattr(cli, "_noted", False)
+    (tmp_path / "home" / "textures-store" / "inputs").mkdir(parents=True)
+    assert main(["status"]) == 0
+    err = capsys.readouterr().err
+    assert err.count("textures site use") == 1
+    assert main(["site", "set", "items", str(tmp_path / "items")]) == 0
+    monkeypatch.setattr(cli, "_noted", False)
+    assert main(["status"]) == 0
+    assert "site use" not in capsys.readouterr().err
 
 
 def test_def_init_then_validate(capsys, tmp_path):

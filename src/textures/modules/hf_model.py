@@ -53,7 +53,9 @@ def directory_digest(directory: Path) -> str:
     return hasher.hexdigest()
 
 
-def resolve_revision(model: str, revision: str | None, cache: Path | None) -> str:
+def resolve_revision(
+    model: str, revision: str | None, cache: Path | None, token: str | None = None
+) -> str:
     """Return the commit hash that `revision` (or the default branch) names now.
 
     A commit hash is returned unchanged. Otherwise the hub is asked; when it
@@ -73,12 +75,12 @@ def resolve_revision(model: str, revision: str | None, cache: Path | None) -> st
     )
 
     try:
-        info = HfApi().model_info(model, revision=revision)
+        info = HfApi().model_info(model, revision=revision, token=token)
         if info.sha is None:
             raise TexturesError(f"the hub reports no commit for model {model!r}")
         return info.sha
     except GatedRepoError as error:
-        raise TexturesError(f"model {model!r} is gated; log in with `hf auth login`") from error
+        raise TexturesError(f"model {model!r} is gated; log in with `textures hf login`") from error
     except RevisionNotFoundError as error:
         raise TexturesError(f"model {model!r} has no revision {revision!r}") from error
     except RepositoryNotFoundError as error:
@@ -96,24 +98,29 @@ def resolve_revision(model: str, revision: str | None, cache: Path | None) -> st
         return Path(path).name
 
 
-def _source(resolved: Mapping[str, Any], cache: Path | None) -> dict[str, Any]:
+def _source(
+    resolved: Mapping[str, Any], cache: Path | None, token: str | None = None
+) -> dict[str, Any]:
     """Arguments for `from_pretrained` that load exactly the resolved model."""
     if is_local(resolved["model"]):
         return {"pretrained_model_name_or_path": resolved["model"]}
-    return {
+    source = {
         "pretrained_model_name_or_path": resolved["model"],
         "revision": resolved["revision"],
         "cache_dir": cache,
     }
+    if token is not None:
+        source["token"] = token
+    return source
 
 
 @lru_cache(maxsize=16)
-def _tokenizer(model: str, revision: str, cache: Path | None):
+def _tokenizer(model: str, revision: str, cache: Path | None, token: str | None):
     from transformers import AutoTokenizer
 
     resolved = {"model": model, "revision": revision}
     try:
-        tokenizer = AutoTokenizer.from_pretrained(**_source(resolved, cache))
+        tokenizer = AutoTokenizer.from_pretrained(**_source(resolved, cache, token))
     except Exception as error:
         raise TexturesError(f"cannot load the tokenizer of model {model!r}: {error}") from error
     if not getattr(tokenizer, "is_fast", True):
@@ -121,8 +128,8 @@ def _tokenizer(model: str, revision: str, cache: Path | None):
     return tokenizer
 
 
-def load_tokenizer(resolved: Mapping[str, Any], cache: Path | None):
-    return _tokenizer(resolved["model"], resolved["revision"], cache)
+def load_tokenizer(resolved: Mapping[str, Any], cache: Path | None, token: str | None = None):
+    return _tokenizer(resolved["model"], resolved["revision"], cache, token)
 
 
 def adds_bos(tokenizer) -> bool:
@@ -263,9 +270,9 @@ class HFModel(Resource):
                 raise TexturesError("revision cannot be set for a local model directory")
             revision = "sha256:" + directory_digest(Path(model))
         else:
-            revision = resolve_revision(model, revision, context.hf_cache)
+            revision = resolve_revision(model, revision, context.hf_cache, context.hf_token)
         resolved = {"model": model, "revision": revision, "dtype": self.spec["dtype"]}
-        tokenizer = load_tokenizer(resolved, context.hf_cache)
+        tokenizer = load_tokenizer(resolved, context.hf_cache, context.hf_token)
         choice = self.spec["document_start"]
         if choice == "auto":
             choice = auto_document_start(tokenizer)
@@ -283,9 +290,11 @@ class HFModel(Resource):
         import transformers
         from transformers import AutoConfig
 
-        tokenizer = load_tokenizer(resolved, context.hf_cache)
+        tokenizer = load_tokenizer(resolved, context.hf_cache, context.hf_token)
         try:
-            config = AutoConfig.from_pretrained(**_source(resolved, context.hf_cache))
+            config = AutoConfig.from_pretrained(
+                **_source(resolved, context.hf_cache, context.hf_token)
+            )
         except Exception as error:
             raise TexturesError(
                 f"cannot load the config of model {resolved['model']!r}: {error}"
@@ -317,7 +326,8 @@ class HFModel(Resource):
         logging.disable_progress_bar()
         try:
             model = AutoModelForCausalLM.from_pretrained(
-                **_source(resolved, context.hf_cache), dtype=getattr(torch, resolved["dtype"])
+                **_source(resolved, context.hf_cache, context.hf_token),
+                dtype=getattr(torch, resolved["dtype"]),
             )
         except Exception as error:
             raise TexturesError(f"cannot load model {resolved['model']!r}: {error}") from error
@@ -325,7 +335,7 @@ class HFModel(Resource):
         model.eval()
         return LanguageModel(
             model=model,
-            tokenizer=load_tokenizer(resolved, context.hf_cache),
+            tokenizer=load_tokenizer(resolved, context.hf_cache, context.hf_token),
             device=target,
             start_ids=list(properties["start_ids"]),
             boundary=torch.from_numpy(mask).to(target),

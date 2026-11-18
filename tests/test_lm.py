@@ -443,7 +443,6 @@ def env(tmp_path: Path, toy_models):
         {**locations, "execution.device": "cpu"},
         env={},
         home=tmp_path / "home",
-        lab_root=tmp_path / "no-lab",
     )
 
 

@@ -1,14 +1,16 @@
-"""The process environment that textures controls.
+"""The process environment that textures controls, and Hugging Face access.
 
 Libraries that textures uses read configuration from environment variables:
 Hugging Face libraries choose caches, tokens, and offline behavior from
-`HF_*`, `HUGGINGFACE_*`, and `TRANSFORMERS_*` variables. textures removes any
-such variables it inherits and sets its own, so results and cache locations
-do not depend on the caller's shell.
+`HF_*`, `HUGGINGFACE_*`, and `TRANSFORMERS_*` variables. In processes that
+textures owns (the `textures` command and Slurm tasks), `apply` removes any
+such variables they inherit and sets its own, so results and cache locations
+do not depend on the caller's shell. `apply` must run before the Hugging Face
+libraries are imported, because they read these variables at import time.
 
-`apply` must run before the Hugging Face libraries are imported, because they
-read these variables at import time. textures imports them only when a model
-is first used, after the command line has called `apply`.
+The Python API leaves the environment of its host process alone. textures
+does not need it: `run_context` passes the cache and the token to the
+Hugging Face libraries directly.
 """
 
 from __future__ import annotations
@@ -17,6 +19,7 @@ import os
 from collections.abc import MutableMapping
 from pathlib import Path
 
+from textures.modules import RunContext
 from textures.settings import Settings, personal_settings_path
 
 MANAGED_PREFIXES = ("HF_", "HUGGINGFACE_", "TRANSFORMERS_")
@@ -28,6 +31,28 @@ def token_path(env: MutableMapping[str, str], home: Path) -> Path:
     Tokens are personal, so they never live in the shared cache.
     """
     return personal_settings_path(env, home).with_name("hf-token")
+
+
+def saved_token(
+    env: MutableMapping[str, str] | None = None, home: Path | None = None
+) -> str | None:
+    """Return the token saved by `textures hf login`, or `None` if there is none."""
+    env = os.environ if env is None else env
+    home = Path.home() if home is None else home
+    try:
+        token = token_path(env, home).read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    return token or None
+
+
+def run_context(settings: Settings) -> RunContext:
+    """The execution context for modules: device, Hugging Face cache, and token.
+
+    Without a saved token, the Hugging Face libraries look for one as they
+    usually do, so a host process's own login still works through the API.
+    """
+    return RunContext(settings.device, settings.hf_cache, saved_token())
 
 
 def apply(

@@ -17,10 +17,11 @@ from typing import Any
 
 from textures.corpus import Corpus, Document
 from textures.definitions import Column, Definitions, Expansion, Variant
+from textures.environment import run_context
 from textures.errors import DefinitionError, InputError, Problem, TexturesError
 from textures.identity import digest
 from textures.inputs import load_input
-from textures.modules import Module, Resource, RunContext
+from textures.modules import Module, Resource
 from textures.settings import Settings
 from textures.store import EntryStore
 
@@ -139,7 +140,7 @@ def plan_request(
             raise InputError(report.problems)
         corpus = report.corpus
     expansion = definitions.expand(workflow, modules, max_variants=settings.max_variants)
-    context = RunContext(settings.device, settings.hf_cache)
+    context = run_context(settings)
     registry = definitions.registry
 
     planned: dict[str, PlannedVariant] = {}

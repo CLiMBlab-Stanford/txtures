@@ -147,3 +147,27 @@ def test_read_table_keeps_text_and_parses_features(tmp_path):
     assert tx.read_table(directory / "x.tsv").equals(table)
     with pytest.raises(TexturesError, match="not an output table"):
         tx.read_table(tmp_path)
+
+
+def test_the_api_leaves_the_process_environment_alone(fake_api, monkeypatch):
+    import os
+
+    monkeypatch.setenv("HF_HOME", "/host/hf")
+    monkeypatch.setenv("HF_TOKEN", "host-token")
+    before = dict(os.environ)
+    tx.compute("fake_feature", "a b")
+    assert dict(os.environ) == before
+
+
+def test_default_locations_warn_once(fake_api, monkeypatch):
+    for key in ("ITEMS", "RESOURCES"):
+        monkeypatch.delenv(f"TEXTURES_{key}")
+    monkeypatch.delenv("TEXTURES_DEFINITIONS")
+    monkeypatch.setattr(api, "_warned_defaults", False)
+    with pytest.warns(api.DefaultLocationsWarning, match="textures site use"):
+        tx.compute("fake_feature", "a b")
+    import warnings
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", api.DefaultLocationsWarning)
+        tx.compute("fake_feature", "a b")

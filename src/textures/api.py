@@ -8,10 +8,13 @@ configured item and resource stores, so repeated calls reuse earlier work.
 The API always computes in the calling process, whatever
 `execution.executor` says; submit Slurm jobs with `textures run`.
 
-Like the command line, the API replaces the Hugging Face variables in the
-process environment (see `textures.environment`) whenever it resolves
-settings. Hugging Face libraries read some of them on import, so use textures
-before importing those libraries yourself.
+The API does not change the process environment. It passes its Hugging
+Face cache and token to the Hugging Face libraries directly, so a host
+program's own use of those libraries is unaffected.
+
+When the definitions store, item store, and resources all come from
+built-in defaults, the first call warns once and suggests how to point
+textures at shared locations.
 """
 
 from __future__ import annotations
@@ -31,8 +34,8 @@ from textures.engine.tables import read_table, table_frame
 __all__ = ["compute", "read_table", "run"]
 from textures.errors import DefinitionError, InputError, Problem
 from textures.inputs import InputSettings, read_texts
-from textures.modules import REGISTRY, RunContext
-from textures.settings import Settings, resolve_settings
+from textures.modules import REGISTRY
+from textures.settings import Settings, resolve_settings, uses_default_locations
 from textures.store import EntryStore
 
 if TYPE_CHECKING:
@@ -41,24 +44,49 @@ if TYPE_CHECKING:
 Texts = str | Sequence[str | Sequence[str]] | Mapping[str, str | Sequence[str]]
 
 
+DEFAULT_LOCATIONS_MESSAGE = """\
+textures is using its default locations in your home directory, so it shares no
+results with others. To use a shared site, run once:
+
+    textures site use /path/to/textures-definitions
+
+or set locations one at a time:
+
+    textures site set items /path/to/items
+    textures site set resources /path/to/textures-resources
+
+`textures site ls` lists every setting. Environment variables such as
+TEXTURES_DEFINITIONS, and arguments to the Python API, also set locations."""
+
+_warned_defaults = False
+
+
 def settings(flags: Mapping[str, Any] | None = None) -> Settings:
-    """Resolve settings, with `flags` taking precedence, and control the environment.
+    """Resolve settings, with `flags` taking precedence.
 
     `flags` maps setting keys, such as `items` or `execution.device`, to
     values. The installation running this interpreter, if any, supplies the
-    settings it records.
+    settings it records. Warns once per process when every shared location
+    comes from built-in defaults.
 
     Raises:
         SettingsError: A settings document or value is invalid.
     """
+    global _warned_defaults
     installed = installation.current()
     resolved = resolve_settings(
         flags,
         installation=installed.settings if installed else None,
         installation_source=installed.source if installed else "installation",
     )
-    environment.apply(resolved)
+    if not _warned_defaults and uses_default_locations(resolved):
+        _warned_defaults = True
+        warnings.warn(DEFAULT_LOCATIONS_MESSAGE, DefaultLocationsWarning, stacklevel=3)
     return resolved
+
+
+class DefaultLocationsWarning(UserWarning):
+    """Every shared location comes from built-in defaults."""
 
 
 def load_definitions(resolved: Settings) -> Definitions:
@@ -74,7 +102,7 @@ def local_executor(plan: Plan, resolved: Settings, progress: Callable[[str], Non
         plan,
         EntryStore(resolved.items),
         EntryStore(resolved.resource_store),
-        RunContext(resolved.device, resolved.hf_cache),
+        environment.run_context(resolved),
         progress,
     )
 

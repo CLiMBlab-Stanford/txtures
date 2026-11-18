@@ -19,11 +19,12 @@ Options:
   --prefix DIR        install into DIR (default: CHECKOUT/textures-install)
   --compute KIND      PyTorch build: cuda or cpu (default: cuda on Linux,
                       cpu on macOS; later runs keep the recorded choice)
-  --resources DIR     shared directory of models and other resources
-                      (default: textures-resources in lab storage if
-                      writable, otherwise ~/textures-resources; later runs
-                      keep the recorded path)
-  --executor KIND     where computation runs: local or slurm (default: local)
+  --site DIR          use the definitions store DIR, whose site settings
+                      name shared locations; recorded in your personal
+                      settings, as `textures site use DIR` does
+  --resources DIR     record DIR as this installation's directory of models
+                      and other resources (later runs keep it)
+  --executor KIND     record where computation runs: local or slurm
   --bin-dir DIR       where to put the textures command (default: ~/.local/bin)
   --no-launcher       do not create the textures command in --bin-dir
   --default           make this installation the one the textures command runs
@@ -46,6 +47,7 @@ prefix=$checkout/textures-install
 compute=
 resources=
 executor=
+site=
 bin_dir=$HOME/.local/bin
 launcher=true
 make_default=false
@@ -54,6 +56,7 @@ while [ $# -gt 0 ]; do
     case $1 in
         --prefix) prefix=${2:?--prefix needs a directory}; shift ;;
         --compute) compute=${2:?--compute needs cuda or cpu}; shift ;;
+        --site) site=${2:?--site needs a directory}; shift ;;
         --resources) resources=${2:?--resources needs a directory}; shift ;;
         --executor) executor=${2:?--executor needs local or slurm}; shift ;;
         --bin-dir) bin_dir=${2:?--bin-dir needs a directory}; shift ;;
@@ -65,6 +68,17 @@ while [ $# -gt 0 ]; do
     esac
     shift
 done
+
+# Paths given relative to the caller's directory, before this script changes it.
+absolute() {
+    case $1 in
+        /*) printf '%s\n' "$1" ;;
+        "~"/*) printf '%s\n' "$HOME/${1#"~"/}" ;;
+        *) printf '%s\n' "$PWD/$1" ;;
+    esac
+}
+if [ -n "$site" ]; then site=$(absolute "$site"); fi
+if [ -n "$resources" ]; then resources=$(absolute "$resources"); fi
 
 mkdir -p "$prefix"
 prefix=$(CDPATH= cd "$prefix" && pwd -P)
@@ -176,6 +190,7 @@ python_version=$(cat "$checkout/.python-version")
 set -- --prefix "$prefix" --checkout "$checkout" --compute "$compute" --uv-version "$UV_VERSION"
 if [ -n "$resources" ]; then set -- "$@" --resources "$resources"; fi
 if [ -n "$executor" ]; then set -- "$@" --executor "$executor"; fi
+if [ -n "$site" ]; then set -- "$@" --site "$site"; fi
 if [ "$launcher" = true ]; then set -- "$@" --bin-dir "$bin_dir"; fi
 if [ "$make_default" = true ]; then set -- "$@" --default; fi
 "$prefix/env/bin/python" -I -m textures.installation configure "$@"

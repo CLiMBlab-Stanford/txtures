@@ -90,10 +90,14 @@ issued as Python warnings. Invalid input, definitions, or settings raise
 `textures.errors.TexturesError` or one of its subclasses. `InputError` and
 `DefinitionError` list every problem in their `problems` attribute.
 
-## Environment
+## Settings and the environment
 
-Like the command line, the API replaces the Hugging Face variables of the
-process environment with its own (see [Settings](settings.md#environment))
-on every call. Hugging Face libraries read some of these variables when they
-are imported, so call textures before importing them yourself in the same
-process.
+The API reads the same settings as the command line, including your personal
+settings, so `textures site use` configures both. Software that depends on
+textures can instead pass locations as arguments or set the `TEXTURES_*`
+environment variables. When every shared location comes from built-in
+defaults, the first call issues a `textures.api.DefaultLocationsWarning`.
+
+The API does not change the process environment. It passes its Hugging Face
+cache and your saved token to the Hugging Face libraries directly, so a host
+program's own use of those libraries is unaffected.

@@ -7,6 +7,7 @@ import json
 import os
 import shutil
 import sys
+import warnings
 from collections.abc import Sequence
 from pathlib import Path
 
@@ -25,8 +26,16 @@ from textures.engine import (
 from textures.engine import slurm as slurm_jobs
 from textures.errors import Problem, SettingsError, TexturesError
 from textures.inputs import InputReport, load_input, read_input, scan_inputs
-from textures.modules import RunContext
-from textures.settings import Settings, resolve_settings
+from textures.settings import (
+    SITE_DOCUMENT,
+    SPECS,
+    Settings,
+    personal_settings_path,
+    resolve_settings,
+    set_personal,
+    unset_personal,
+    uses_default_locations,
+)
 from textures.store import EntryStore
 
 PATH_FLAGS = {
@@ -54,11 +63,29 @@ def build_parser() -> argparse.ArgumentParser:
         )
     commands = parser.add_subparsers(dest="command", metavar="COMMAND")
 
-    site = commands.add_parser("site", help="inspect site settings")
+    site = commands.add_parser("site", help="show and change settings")
     site_commands = site.add_subparsers(dest="site_command", metavar="COMMAND", required=True)
-    show = site_commands.add_parser("show", help="print every resolved setting and its source")
-    show.add_argument("--json", action="store_true", help="print JSON")
-    show.set_defaults(handler=site_show)
+    listing = site_commands.add_parser(
+        "ls", aliases=["show"], help="list every setting with its value, source, and meaning"
+    )
+    listing.add_argument("--json", action="store_true", help="print JSON")
+    listing.set_defaults(handler=site_ls)
+    use = site_commands.add_parser(
+        "use", help="use a definitions store, whose site settings name shared locations"
+    )
+    use.add_argument("path", type=Path, help="the definitions store")
+    use.set_defaults(handler=site_use)
+    setter = site_commands.add_parser("set", help="set one setting in your personal settings")
+    setter.add_argument("key", help="setting key, such as items or slurm.partition")
+    setter.add_argument(
+        "values", nargs="+", metavar="VALUE", help="the value; several for slurm.options"
+    )
+    setter.set_defaults(handler=site_set)
+    unsetter = site_commands.add_parser(
+        "unset", help="remove one setting from your personal settings"
+    )
+    unsetter.add_argument("key", help="setting key")
+    unsetter.set_defaults(handler=site_unset)
 
     definitions = commands.add_parser("def", help="create and validate definitions stores")
     def_commands = definitions.add_subparsers(dest="def_command", metavar="COMMAND", required=True)
@@ -140,11 +167,25 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _settings(args: argparse.Namespace, **overrides: object) -> Settings:
-    """Resolve settings and set the process environment that textures controls."""
+_noted = False
+
+
+def _settings(args: argparse.Namespace, *, note: bool = True, **overrides: object) -> Settings:
+    """Resolve settings and set the process environment that textures controls.
+
+    With `note`, prints the default-locations notice when it applies.
+    """
     flags = {key: getattr(args, key) for key in PATH_FLAGS}
     flags.update({key: value for key, value in overrides.items() if value is not None})
-    return api.settings(flags)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", api.DefaultLocationsWarning)
+        settings = api.settings(flags)
+    environment.apply(settings)
+    global _noted
+    if note and not _noted and uses_default_locations(settings):
+        _noted = True
+        print(f"note: {api.DEFAULT_LOCATIONS_MESSAGE}", file=sys.stderr)
+    return settings
 
 
 def _show(value: object) -> str:
@@ -155,27 +196,28 @@ def _show(value: object) -> str:
     return str(value)
 
 
-def site_show(args: argparse.Namespace) -> int:
-    """Print the installation and every resolved setting with its source."""
-    settings = _settings(args)
+def _json_value(value: object) -> object:
+    return str(value) if isinstance(value, Path) else value
+
+
+def site_ls(args: argparse.Namespace) -> int:
+    """Print the installation and every setting with its value, source, and meaning."""
+    settings = _settings(args, note=False)
     installed = installation.current()
-    rows = [
-        (setting.key, _show(setting.value), setting.source) for setting in settings.values.values()
-    ]
     if args.json:
         payload = {
             "installation": None
             if installed is None
             else {"prefix": str(installed.prefix), "compute": installed.compute},
+            "personal_settings": str(personal_settings_path(os.environ, Path.home())),
             "settings": [
                 {
-                    "key": setting.key,
-                    "value": str(setting.value)
-                    if isinstance(setting.value, Path)
-                    else setting.value,
-                    "source": setting.source,
+                    "key": spec.key,
+                    "value": _json_value(settings.values[spec.key].value),
+                    "source": settings.values[spec.key].source,
+                    "description": spec.description,
                 }
-                for setting in settings.values.values()
+                for spec in SPECS
             ],
         }
         print(json.dumps(payload, indent=2))
@@ -184,9 +226,57 @@ def site_show(args: argparse.Namespace) -> int:
         print("installation: none (running outside an ./install environment)")
     else:
         print(f"installation: {installed.prefix} ({installed.compute})")
-    widths = [max(len(row[index]) for row in rows) for index in range(2)]
-    for key, value, source in rows:
-        print(f"{key:<{widths[0]}}  {value:<{widths[1]}}  {source}")
+    print(f"personal settings: {personal_settings_path(os.environ, Path.home())}")
+    rows = [(spec, _show(settings.values[spec.key].value)) for spec in SPECS]
+    key_width = max(len(spec.key) for spec, _ in rows)
+    value_width = max(len(value) for _, value in rows)
+    for spec, value in rows:
+        source = settings.values[spec.key].source
+        print(f"{spec.key:<{key_width}}  {value:<{value_width}}  {source}")
+        print(f"{'':<{key_width}}  {spec.description}")
+    if uses_default_locations(settings):
+        print(f"\nnote: {api.DEFAULT_LOCATIONS_MESSAGE}")
+    return 0
+
+
+def _report_setting(args: argparse.Namespace, key: str, written: Path) -> None:
+    """Print where `key` now comes from, noting a source that overrides `written`."""
+    setting = _settings(args, note=False).values[key]
+    print(f"{key} is now {_show(setting.value)} ({setting.source})")
+    if not setting.source.startswith("personal settings") and setting.source != "default":
+        print(f"note: {setting.source} overrides {written} for {key}", file=sys.stderr)
+
+
+def site_use(args: argparse.Namespace) -> int:
+    """Point personal settings at a definitions store, whose site settings name the rest."""
+    store = args.path.expanduser().absolute()
+    if not store.is_dir():
+        raise TexturesError(f"{store} is not a directory; give the path of a definitions store")
+    path = set_personal("definitions", [str(store)])
+    print(f"set definitions to {store} in {path}")
+    if not (store / SITE_DOCUMENT).is_file():
+        print(f"note: {store} has no {SITE_DOCUMENT}, so it sets no shared locations")
+    settings = _settings(args, note=False)
+    _report_setting(args, "definitions", path)
+    for key in ("items", "resources", "inputs", "derivatives"):
+        setting = settings.values[key]
+        print(f"  {key}: {setting.value} ({setting.source})")
+    return 0
+
+
+def site_set(args: argparse.Namespace) -> int:
+    """Set one setting in personal settings."""
+    path = set_personal(args.key, args.values)
+    _report_setting(args, args.key, path)
+    return 0
+
+
+def site_unset(args: argparse.Namespace) -> int:
+    """Remove one setting from personal settings."""
+    path, removed = unset_personal(args.key)
+    if not removed:
+        print(f"{args.key} is not set in {path}")
+    _report_setting(args, args.key, path)
     return 0
 
 
@@ -194,7 +284,7 @@ def hf_login(args: argparse.Namespace) -> int:
     """Check a Hugging Face token and save it where only its owner can read it."""
     import getpass
 
-    _settings(args)
+    _settings(args, note=False)
     if sys.stdin.isatty():
         token = getpass.getpass("Hugging Face token: ").strip()
     else:
@@ -219,7 +309,7 @@ def hf_login(args: argparse.Namespace) -> int:
 
 
 def hf_logout(args: argparse.Namespace) -> int:
-    _settings(args)
+    _settings(args, note=False)
     path = environment.token_path(os.environ, Path.home())
     if path.exists():
         path.unlink()
@@ -230,7 +320,7 @@ def hf_logout(args: argparse.Namespace) -> int:
 
 
 def hf_whoami(args: argparse.Namespace) -> int:
-    _settings(args)
+    _settings(args, note=False)
     path = environment.token_path(os.environ, Path.home())
     if not path.is_file():
         print("no token is saved; run `textures hf login`")
@@ -520,7 +610,7 @@ def worker_command(args: argparse.Namespace) -> int:
         plan,
         items,
         resources,
-        RunContext(settings.device, settings.hf_cache),
+        environment.run_context(settings),
         _progress,
         shard=(args.task, job.workers),
     )

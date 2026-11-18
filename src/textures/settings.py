@@ -6,21 +6,24 @@ command-line flag, environment variable, the installation record written by
 `./install`, personal settings, the definitions store's site settings,
 built-in default. `definitions` cannot come from site settings, since it
 selects the store that holds them.
+
+Built-in defaults are directories in the home directory. A lab shares its
+stores by giving members the path of its definitions store, whose site
+settings name the rest; `textures site use PATH` records it in personal
+settings.
 """
 
 from __future__ import annotations
 
 import os
-from collections.abc import Mapping
+import tempfile
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
 from textures.errors import SettingsError
 from textures.yamlio import YamlError, load_mapping
-
-LAB_ROOT = Path("/juice6/u/nlp/climblab")
-"""Shared lab storage. Defaults point here when it is accessible."""
 
 SITE_DOCUMENT = Path("site") / "site.yml"
 """Location of the site settings document inside a definitions store."""
@@ -30,35 +33,40 @@ Kind = Literal["path", "text", "choice", "positive_int", "count", "text_list"]
 
 @dataclass(frozen=True)
 class SettingSpec:
-    """Declaration of one setting: its dotted key, value kind, and environment variable.
+    """Declaration of one setting: its dotted key, value kind, meaning, and environment variable.
 
     A `choice` setting accepts only the values in `choices`.
     """
 
     key: str
     kind: Kind
+    description: str
     env: str | None = None
     choices: tuple[str, ...] = ()
 
 
 SPECS: tuple[SettingSpec, ...] = (
-    SettingSpec("definitions", "path", "TEXTURES_DEFINITIONS"),
-    SettingSpec("inputs", "path", "TEXTURES_INPUTS"),
-    SettingSpec("derivatives", "path", "TEXTURES_DERIVATIVES"),
-    SettingSpec("items", "path", "TEXTURES_ITEMS"),
-    SettingSpec("resources", "path", "TEXTURES_RESOURCES"),
-    SettingSpec("execution.device", "text"),
-    SettingSpec("execution.executor", "choice", choices=("local", "slurm")),
-    SettingSpec("execution.max_variants", "positive_int"),
-    SettingSpec("slurm.partition", "text"),
-    SettingSpec("slurm.account", "text"),
-    SettingSpec("slurm.time_hours", "positive_int"),
-    SettingSpec("slurm.memory_gb", "positive_int"),
-    SettingSpec("slurm.cpus", "positive_int"),
-    SettingSpec("slurm.gpus", "count"),
-    SettingSpec("slurm.workers", "positive_int"),
-    SettingSpec("slurm.options", "text_list"),
+    SettingSpec("definitions", "path", "the definitions store", "TEXTURES_DEFINITIONS"),
+    SettingSpec("inputs", "path", "directory of input files", "TEXTURES_INPUTS"),
+    SettingSpec("derivatives", "path", "directory of output tables", "TEXTURES_DERIVATIVES"),
+    SettingSpec("items", "path", "store of per-document results", "TEXTURES_ITEMS"),
+    SettingSpec("resources", "path", "models and the Hugging Face cache", "TEXTURES_RESOURCES"),
+    SettingSpec("execution.device", "text", "auto, cpu, cuda, cuda:N, or mps"),
+    SettingSpec(
+        "execution.executor", "choice", "local, or slurm to submit jobs", choices=("local", "slurm")
+    ),
+    SettingSpec("execution.max_variants", "positive_int", "most variants one module may expand to"),
+    SettingSpec("slurm.partition", "text", "partition to submit to; required for slurm"),
+    SettingSpec("slurm.account", "text", "account to charge"),
+    SettingSpec("slurm.time_hours", "positive_int", "time limit of each task, in hours"),
+    SettingSpec("slurm.memory_gb", "positive_int", "memory of each task, in GB"),
+    SettingSpec("slurm.cpus", "positive_int", "CPUs of each task"),
+    SettingSpec("slurm.gpus", "count", "GPUs of each task; 0 for none"),
+    SettingSpec("slurm.workers", "positive_int", "array tasks that share a run"),
+    SettingSpec("slurm.options", "text_list", "further sbatch options"),
 )
+LOCATIONS = ("definitions", "items", "resources")
+"""Settings that decide whether results are shared; see `uses_default_locations`."""
 SPEC_BY_KEY = {spec.key: spec for spec in SPECS}
 
 
@@ -144,37 +152,19 @@ def personal_settings_path(env: Mapping[str, str], home: Path) -> Path:
     return base / "textures" / "settings.yml"
 
 
-def _writable(path: Path) -> bool:
-    """Report whether `path`, or its nearest existing ancestor, is writable."""
-    while not path.exists():
-        if path.parent == path:
-            return False
-        path = path.parent
-    return os.access(path, os.W_OK | os.X_OK)
-
-
-def default_values(home: Path, lab_root: Path) -> dict[str, Any]:
-    """Return built-in defaults, which depend on whether lab storage is accessible.
+def default_values(home: Path) -> dict[str, Any]:
+    """Return built-in defaults: directories in the home directory.
 
     `textures-definitions`, `textures-store`, and `textures-resources` are
-    siblings, in lab storage when it is accessible and otherwise in the home
-    directory. Inputs and derivatives are always personal.
+    siblings, apart from any code.
     """
-    lab_readable = lab_root.is_dir() and os.access(lab_root, os.R_OK | os.X_OK)
-
-    def shared(name: str) -> Path:
-        lab = lab_root / name
-        return lab if lab_readable and _writable(lab) else home / name
-
-    personal = home / "textures-store"
+    store = home / "textures-store"
     return {
-        "definitions": lab_root / "textures-definitions"
-        if lab_readable
-        else home / "textures-definitions",
-        "inputs": personal / "inputs",
-        "derivatives": personal / "derivatives",
-        "items": shared("textures-store") / "items",
-        "resources": shared("textures-resources"),
+        "definitions": home / "textures-definitions",
+        "inputs": store / "inputs",
+        "derivatives": store / "derivatives",
+        "items": store / "items",
+        "resources": home / "textures-resources",
         "execution.device": "auto",
         "execution.executor": "local",
         "execution.max_variants": 64,
@@ -257,7 +247,6 @@ def resolve_settings(
     env: Mapping[str, str] | None = None,
     home: Path | None = None,
     cwd: Path | None = None,
-    lab_root: Path = LAB_ROOT,
     installation: Mapping[str, Any] | None = None,
     installation_source: str = "installation",
 ) -> Settings:
@@ -292,7 +281,7 @@ def resolve_settings(
     personal = (
         _read_document(personal_path, allow_definitions=True) if personal_path.is_file() else {}
     )
-    defaults = default_values(home, lab_root)
+    defaults = default_values(home)
     resolved: dict[str, Setting] = {}
 
     def from_layers(spec: SettingSpec, site: Mapping[str, Any], site_path: Path) -> Setting:
@@ -318,3 +307,106 @@ def resolve_settings(
         if spec.key != "definitions":
             resolved[spec.key] = from_layers(spec, site, site_path)
     return Settings(resolved)
+
+
+def uses_default_locations(settings: Settings) -> bool:
+    """Report whether the definitions store, item store, and resources all use defaults.
+
+    Such a configuration shares no results with anyone, which is usually an
+    oversight on a machine with lab storage.
+    """
+    return all(settings.values[key].source == "default" for key in LOCATIONS)
+
+
+# Editing personal settings
+
+
+def _personal_document(path: Path) -> dict[str, Any]:
+    return _read_document(path, allow_definitions=True) if path.is_file() else {}
+
+
+def _write_personal(path: Path, values: Mapping[str, Any]) -> None:
+    """Write dotted-key values as a nested YAML document, atomically."""
+    import yaml
+
+    nested: dict[str, Any] = {}
+    for key in (spec.key for spec in SPECS if spec.key in values):
+        value = values[key]
+        value = str(value) if isinstance(value, Path) else value
+        *groups, name = key.split(".")
+        target = nested
+        for group in groups:
+            target = target.setdefault(group, {})
+        target[name] = value
+    path.parent.mkdir(parents=True, exist_ok=True)
+    text = "# Personal textures settings, written by `textures site`.\n"
+    if nested:
+        text += yaml.safe_dump(nested, sort_keys=False, allow_unicode=True)
+    descriptor, staging = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            handle.write(text)
+        os.replace(staging, path)
+    except BaseException:
+        Path(staging).unlink(missing_ok=True)
+        raise
+
+
+def set_personal(
+    key: str,
+    values: Sequence[str],
+    *,
+    env: Mapping[str, str] | None = None,
+    home: Path | None = None,
+    cwd: Path | None = None,
+) -> Path:
+    """Set one setting in personal settings and return the document's path.
+
+    `values` holds one value, or any number for a list setting. A relative
+    path is made absolute against `cwd`. The document is rewritten, so
+    comments in it are not kept.
+
+    Raises:
+        SettingsError: The key is unknown or the value is invalid.
+    """
+    env = os.environ if env is None else env
+    home = Path.home() if home is None else home
+    cwd = Path.cwd() if cwd is None else cwd
+    spec = SPEC_BY_KEY.get(key)
+    if spec is None:
+        raise SettingsError(f"unknown setting {key!r}; see `textures site ls`")
+    if spec.kind == "text_list":
+        raw: Any = list(values)
+    elif len(values) != 1:
+        raise SettingsError(f"{key} takes one value")
+    else:
+        raw = values[0]
+    value = _coerce(spec, raw, cwd, key)
+    path = personal_settings_path(env, home)
+    document = _personal_document(path)
+    document[key] = value.absolute() if isinstance(value, Path) else value
+    _write_personal(path, document)
+    return path
+
+
+def unset_personal(
+    key: str, *, env: Mapping[str, str] | None = None, home: Path | None = None
+) -> tuple[Path, bool]:
+    """Remove one setting from personal settings.
+
+    Returns the document's path and whether the setting was there.
+
+    Raises:
+        SettingsError: The key is unknown.
+    """
+    env = os.environ if env is None else env
+    home = Path.home() if home is None else home
+    if key not in SPEC_BY_KEY:
+        raise SettingsError(f"unknown setting {key!r}; see `textures site ls`")
+    path = personal_settings_path(env, home)
+    document = _personal_document(path)
+    if key not in document:
+        return path, False
+    del document[key]
+    _write_personal(path, document)
+    return path, True

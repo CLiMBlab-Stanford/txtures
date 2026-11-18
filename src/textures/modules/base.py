@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Iterable, Iterator, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, ClassVar
 
@@ -27,10 +27,15 @@ class ModuleConfig(BaseModel):
 
 @dataclass(frozen=True)
 class RunContext:
-    """Execution settings passed to modules and resources. They never affect results."""
+    """Execution settings passed to modules and resources. They never affect results.
+
+    `hf_token` authenticates with the Hugging Face hub; `None` lets the hub
+    library find a token itself.
+    """
 
     device: str = "auto"
     hf_cache: Path | None = None
+    hf_token: str | None = field(default=None, repr=False)
 
 
 class Resource:
@@ -180,8 +185,8 @@ class Registry:
         if not (isinstance(config, type) and issubclass(config, ModuleConfig)):
             raise ValueError(f"module {name!r} must set Config to a ModuleConfig subclass")
         fields = config.model_fields
-        for field_name, field in fields.items():
-            if field.is_required():
+        for field_name, info in fields.items():
+            if info.is_required():
                 raise ValueError(f"module {name!r} config field {field_name!r} needs a default")
         grouped: set[str] = set()
         for key, group in module.sweeps.items():

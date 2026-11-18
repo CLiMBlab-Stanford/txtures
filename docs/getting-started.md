@@ -15,15 +15,23 @@ conda environment, or uv configuration already on the machine. Add
 `--compute cpu` on a machine without an NVIDIA GPU. [Settings](settings.md#installation)
 lists every option.
 
-Check the result:
+If your lab shares a definitions store, point textures at it once:
 
 ```bash
-textures site show
+textures site use /path/to/textures-definitions
 ```
 
-This prints every setting and where its value came from. The locations that
-matter first are `inputs`, where textures reads your files, and
-`derivatives`, where it writes output tables.
+Its site settings then choose the shared locations, so you reuse models and
+results that others have computed. Without one, textures keeps everything in
+your home directory and says so with a note. Check the result:
+
+```bash
+textures site ls
+```
+
+This lists every setting, its value, and where the value came from. The
+locations that matter first are `inputs`, where textures reads your files,
+and `derivatives`, where it writes output tables.
 
 ## Compute surprisal
 

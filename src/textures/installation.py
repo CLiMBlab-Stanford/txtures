@@ -9,8 +9,8 @@ default:
 - `env/`: the environment, with textures installed from the checkout;
 - `bin/textures`: the launcher, which runs the environment's interpreter in
   isolated mode;
-- `install.json`: the choices made at installation, including the settings
-  the installation fixes (`resources` and `execution.executor`).
+- `install.json`: the choices made at installation, including any settings
+  the installation fixes (`resources` and `execution.executor`, when given).
 
 `./install` bootstraps uv and the environment and then runs this module's
 `configure` command with the environment's interpreter.
@@ -30,7 +30,7 @@ from typing import Any
 
 from textures import __version__
 from textures.errors import SettingsError
-from textures.settings import LAB_ROOT, default_values
+from textures.settings import set_personal
 
 RECORD = "install.json"
 RECORD_VERSION = 1
@@ -148,14 +148,17 @@ def configure(
     bin_dir: Path | None = None,
     make_default: bool = False,
     uv_version: str = "",
-    home: Path | None = None,
-    lab_root: Path = LAB_ROOT,
+    site: Path | None = None,
 ) -> tuple[Installation, list[str]]:
     """Write the installation record and launchers.
 
-    Settings not given keep their recorded values. On a first installation,
-    `resources` defaults to the built-in default, which is then recorded so it
-    does not change later. Returns the installation and messages to print.
+    The record fixes only the settings given here or in an earlier run;
+    other settings resolve as they would without an installation. `site`, a
+    definitions store, is written to the user's personal settings, as
+    `textures site use` does. Returns the installation and messages to print.
+
+    Raises:
+        SettingsError: A choice is invalid, or `site` is not a directory.
     """
     if compute not in COMPUTE:
         raise SettingsError(f"compute must be one of {', '.join(COMPUTE)}")
@@ -163,14 +166,12 @@ def configure(
         raise SettingsError(f"executor must be one of {', '.join(EXECUTORS)}")
     previous = read(prefix)
     settings = dict(previous.settings) if previous else {}
+    if site is not None and not site.expanduser().is_dir():
+        raise SettingsError(f"site {site} is not a definitions store directory")
     if resources is not None:
         settings["resources"] = str(resources.expanduser().absolute())
-    elif "resources" not in settings:
-        defaults = default_values(Path.home() if home is None else home, lab_root)
-        settings["resources"] = str(defaults["resources"])
     if executor is not None:
         settings["execution.executor"] = executor
-    settings.setdefault("execution.executor", "local")
 
     environment = prefix / "env"
     record = {
@@ -193,6 +194,9 @@ def configure(
     messages += [f"  {key}: {value}" for key, value in sorted(settings.items())]
     if bin_dir is not None:
         messages.append(install_user_launcher(bin_dir, launcher, make_default))
+    if site is not None:
+        path = set_personal("definitions", [str(site.expanduser().absolute())])
+        messages.append(f"set definitions to {site} in {path}")
     installation = read(prefix)
     assert installation is not None
     return installation, messages
@@ -210,6 +214,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     setup.add_argument("--bin-dir", type=Path)
     setup.add_argument("--default", action="store_true", dest="make_default")
     setup.add_argument("--uv-version", default="")
+    setup.add_argument("--site", type=Path)
     args = parser.parse_args(argv)
     try:
         _, messages = configure(
@@ -221,6 +226,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             bin_dir=args.bin_dir,
             make_default=args.make_default,
             uv_version=args.uv_version,
+            site=args.site,
         )
     except SettingsError as error:
         print(f"textures: error: {error}", file=sys.stderr)

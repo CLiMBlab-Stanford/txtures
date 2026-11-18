@@ -7,13 +7,12 @@ settings.
 
 ## Settings
 
-Set at least the partition, and the account if the cluster requires one:
+Set at least the partition, and the account if the cluster requires one,
+in your personal settings or the lab's site settings:
 
-```yaml
-# ~/.config/textures/settings.yml
-slurm:
-  partition: gpu
-  account: mylab
+```bash
+textures site set slurm.partition gpu
+textures site set slurm.account mylab
 ```
 
 | Key | Default | Meaning |
