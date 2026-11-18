@@ -27,9 +27,9 @@ table = tx.compute(
 ```
 
 ```text
-  doc_id  region_index region  char_start  char_end  surprisal_wordboundary  surprisal_none
-0      1             1    The           0         3                4.734790        4.729301
-1      1             2  horse           4         9               13.651452       13.264466
+  document_id  region_index   text  char_start  char_end  surprisal_wordboundary  surprisal_none
+0           1             1    The           0         3                4.734790        4.729301
+1           1             2  horse           4         9               13.651452       13.264466
 ```
 
 `modules` names one feature module or a list of them. `texts` is one

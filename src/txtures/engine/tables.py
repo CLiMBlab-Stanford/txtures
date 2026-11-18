@@ -27,6 +27,7 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 
 from txtures import __version__
+from txtures.corpus import SEGMENT_LEVELS
 from txtures.definitions import Definitions
 from txtures.engine.execution import Executor
 from txtures.engine.planning import Plan, PlannedVariant, plan_request
@@ -124,13 +125,23 @@ def table_is_current(plan: Plan) -> bool:
     )
 
 
+def _segment_levels(corpus) -> list[str]:
+    """The segment levels that some document of `corpus` defines, outermost first."""
+    return [level for level in SEGMENT_LEVELS if corpus.segment_count(level)]
+
+
 def table_header(plan: Plan) -> list[str]:
-    """The output table's column names: location, metadata, then features."""
+    """The output table's column names: location, metadata, then features.
+
+    Each section, paragraph, or sentence ID column is present only when the
+    input defines that level, and `region_id` only when the input gives one.
+    """
     corpus = plan.corpus
-    has_sentences = any(document.sentences for document in corpus.documents)
-    base = ["doc_id", *(["sentence_id"] if has_sentences else []), "region_index", "region"]
-    header = [*base, "char_start", "char_end", *corpus.metadata_columns]
-    return header + [column.name for column in plan.columns]
+    ids = [f"{level}_id" for level in _segment_levels(corpus)]
+    if corpus.has_region_ids:
+        ids.append("region_id")
+    header = ["document_id", *ids, "region_index", "text", "char_start", "char_end"]
+    return [*header, *corpus.metadata_columns, *(column.name for column in plan.columns)]
 
 
 def table_rows(plan: Plan, executor: Executor) -> Iterator[list[Any]]:
@@ -144,18 +155,17 @@ def table_rows(plan: Plan, executor: Executor) -> Iterator[list[Any]]:
             a feature.
     """
     corpus = plan.corpus
-    has_sentences = any(document.sentences for document in corpus.documents)
+    levels = _segment_levels(corpus)
     column_variants = plan.column_variants()
     for document in corpus.documents:
         features = _document_columns(document, column_variants, executor)
-        sentence_of = _sentence_ids(document)
+        segment_ids = [document.segment_ids(level) for level in levels]
+        if corpus.has_region_ids:
+            segment_ids.append(list(document.region_ids))
         for index, (start, end) in enumerate(document.regions):
-            metadata = (
-                document.region_metadata[index] if document.region_metadata else document.metadata
-            )
-            values: list[Any] = [document.doc_id]
-            if has_sentences:
-                values.append(sentence_of[index] if sentence_of else None)
+            metadata = document.region_metadata[index] if document.region_metadata else {}
+            values: list[Any] = [document.document_id]
+            values += [ids[index] if ids else None for ids in segment_ids]
             values += [index + 1, document.text[start:end], start, end]
             values += [metadata.get(name) for name in corpus.metadata_columns]
             values += [feature[index] for feature in features]
@@ -271,14 +281,6 @@ def read_table(path: Path | str) -> pd.DataFrame:
     return _typed(frame, features)
 
 
-def _sentence_ids(document) -> list[str]:
-    ids: list[str] = [""] * len(document.regions)
-    for sentence in document.sentences:
-        for index in range(sentence.start, sentence.stop):
-            ids[index] = sentence.sentence_id
-    return ids if document.sentences else []
-
-
 def _document_columns(document, column_variants, executor: Executor) -> list[Sequence[Any]]:
     """Return each requested feature column's values for one document."""
     by_variant: dict[str, Mapping[str, Any]] = {}
@@ -295,7 +297,7 @@ def _document_columns(document, column_variants, executor: Executor) -> list[Seq
         if len(values) != len(document.regions):
             raise TxturesError(
                 f"module {planned.name} returned {len(values)} {column.feature} values for "
-                f"document {document.doc_id!r}, which has {len(document.regions)} regions"
+                f"document {document.document_id!r}, which has {len(document.regions)} regions"
             )
         features.append(values)
     return features

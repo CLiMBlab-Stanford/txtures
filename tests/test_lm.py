@@ -10,7 +10,7 @@ import torch
 import toy_lm
 from conftest import write
 
-from txtures.corpus import Document, Sentence
+from txtures.corpus import Document, Segment
 from txtures.definitions import Definitions
 from txtures.engine import Executor, plan_request, run_request
 from txtures.errors import DefinitionError, TxturesError
@@ -58,7 +58,7 @@ def lms(toy_models, tmp_path_factory):
     return get
 
 
-def document(words: list[str], sentences: list[int] | None = None, doc_id="d") -> Document:
+def document(words: list[str], sentences: list[int] | None = None, document_id="d") -> Document:
     """A document whose regions are `words` joined by single spaces.
 
     `sentences` lists sentence lengths in regions.
@@ -71,10 +71,10 @@ def document(words: list[str], sentences: list[int] | None = None, doc_id="d") -
     if sentences:
         starts = np.cumsum([0, *sentences])
         spans = tuple(
-            Sentence(str(n + 1), int(a), int(b))
+            Segment(str(n + 1), int(a), int(b))
             for n, (a, b) in enumerate(zip(starts, starts[1:], strict=False))
         )
-    return Document(doc_id, " ".join(words), tuple(regions), spans)
+    return Document(document_id, " ".join(words), tuple(regions), spans)
 
 
 def scores(lm, documents, **config):
@@ -438,7 +438,7 @@ def env(tmp_path: Path, toy_models):
         tmp_path / "definitions" / "configs" / "surprisal" / "units.yml",
         "extends: main\nunits: [bits, nats]\n",
     )
-    write(tmp_path / "inputs" / "doc.tsv", "doc_id\ttext\nx\tab ba b\ny\ta\n")
+    write(tmp_path / "inputs" / "doc.tsv", "document_id\ttext\nx\tab ba b\ny\ta\n")
     return resolve_settings(
         {**locations, "execution.device": "cpu"},
         env={},
@@ -461,7 +461,7 @@ def test_surprisal_table_from_a_local_model(env, lms):
     plan, executor, (directory, written) = run(env, "toy")
     assert written
     rows = [line.split("\t") for line in (directory / "doc.tsv").read_text().splitlines()]
-    assert rows[0] == ["doc_id", "region_index", "region", "char_start", "char_end", "surprisal"]
+    assert rows[0] == ["document_id", "region_index", "text", "char_start", "char_end", "surprisal"]
     assert [row[2] for row in rows[1:]] == ["ab", "ba", "b", "a"]
     expected = [
         *surprisal(lms("eos"), document(["ab", "ba", "b"])),

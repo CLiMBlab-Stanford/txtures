@@ -54,11 +54,11 @@ def region_tokens(document: Document, char_start, char_end) -> list[tuple[int, i
             first = start + len(text) - len(text.lstrip())
             if first < document.regions[region][0]:
                 raise TxturesError(
-                    f"document {document.doc_id!r}: token {text!r} spans more than one region"
+                    f"document {document.document_id!r}: token {text!r} spans more than one region"
                 )
         assigned.append(region)
     if any(b < a for a, b in zip(assigned, assigned[1:], strict=False)):
-        raise TxturesError(f"document {document.doc_id!r}: tokens are out of order")
+        raise TxturesError(f"document {document.document_id!r}: tokens are out of order")
     ranges = []
     for region in range(len(ends)):
         ranges.append((bisect.bisect_left(assigned, region), bisect.bisect_right(assigned, region)))

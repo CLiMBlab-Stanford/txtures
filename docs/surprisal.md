@@ -105,8 +105,10 @@ manifest.
 
 Some tokenizers, including Qwen's, join punctuation and a following newline
 into one token. Such a token spans two regions, and `surprisal` refuses the
-document. Inputs contain newlines only when a sidecar sets a newline joiner,
-so the default joiners avoid the problem.
+document. Inputs contain newlines only between paragraphs and sections,
+whose default joiners are `"\n"` and `"\n\n"`, or when a sidecar sets another
+newline joiner. Set `paragraph_joiner` and `section_joiner` to `" "` to avoid
+the problem.
 
 `lm_scores` needs a fast (Rust-based) tokenizer, which provides the
 character spans that map tokens to regions.

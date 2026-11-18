@@ -79,10 +79,10 @@ The table has one row per region. By default a region is a
 whitespace-delimited word:
 
 ```text
-doc_id  region_index  region  char_start  char_end  surprisal
-1       1             The     0           3         4.734790383357864
-1       2             horse   4           9         13.651452087029186
-1       3             raced   10          15        10.626696552055186
+document_id  region_index  text   char_start  char_end  surprisal
+1            1             The    0           3         4.734790383357864
+1            2             horse  4           9         13.651452087029186
+1            3             raced  10          15        10.626696552055186
 ```
 
 Running the same command again finds the table current and does nothing.

@@ -22,10 +22,11 @@ directories.
 
 | Column | Meaning |
 | --- | --- |
-| `doc_id` | the document's ID |
-| `sentence_id` | the sentence's ID; present only when the input has sentences |
+| `document_id` | the document's ID |
+| `section_id`, `paragraph_id`, `sentence_id` | the ID of the region's section, paragraph, and sentence; each is present only when the input defines that level |
+| `region_id` | the region's ID; present only when the input has a `region_id` column |
 | `region_index` | the region's position in its document, from 1 |
-| `region` | the region's text |
+| `text` | the region's text |
 | `char_start`, `char_end` | the region's character span in the text the model read |
 | metadata | the input's metadata columns, in file order |
 | features | one group per requested module, in workflow order |

@@ -12,6 +12,7 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from txtures import __version__, api, environment, installation
+from txtures.corpus import SEGMENT_LEVELS
 from txtures.definitions import Definitions, init_store
 from txtures.engine import (
     Executor,
@@ -382,6 +383,8 @@ def _summary(report: InputReport) -> dict[str, object]:
         "valid": corpus is not None,
         "layout": corpus.layout if corpus else None,
         "documents": len(corpus.documents) if corpus else None,
+        "sections": corpus.segment_count("section") if corpus else None,
+        "paragraphs": corpus.segment_count("paragraph") if corpus else None,
         "sentences": corpus.sentence_count if corpus else None,
         "regions": corpus.region_count if corpus else None,
         "metadata_columns": list(corpus.metadata_columns) if corpus else None,
@@ -444,8 +447,9 @@ def inputs_check(args: argparse.Namespace) -> int:
     corpus = report.corpus
     print(f"{corpus.name}: {corpus.layout}")
     print(f"  documents: {len(corpus.documents)}")
-    if corpus.sentence_count:
-        print(f"  sentences: {corpus.sentence_count}")
+    for level in SEGMENT_LEVELS:
+        if count := corpus.segment_count(level):
+            print(f"  {level}s: {count}")
     print(f"  regions: {corpus.region_count}")
     if corpus.metadata_columns:
         print(f"  metadata columns: {', '.join(corpus.metadata_columns)}")
