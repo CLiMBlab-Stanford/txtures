@@ -111,12 +111,12 @@ def fake_engine(monkeypatch, tmp_path):
     """Run CLI engine commands against the stand-in modules in temporary stores."""
     import fake_modules
 
-    from textures import cli
+    from textures import api
     from textures.definitions import Definitions
 
     fake_modules.reset()
     monkeypatch.setattr(
-        cli, "_definitions", lambda settings: Definitions.packaged(fake_modules.registry())
+        api, "load_definitions", lambda settings: Definitions.packaged(fake_modules.registry())
     )
     for key in ("inputs", "derivatives", "resources", "items"):
         monkeypatch.setenv(f"TEXTURES_{key.upper()}", str(tmp_path / key))

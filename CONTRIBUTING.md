@@ -100,7 +100,7 @@ metadata, not in ordinary technical documentation.
 ## Changes to computed values
 
 Every module declares an output-contract version. Cached resources, item
-intermediates, and project outputs are keyed partly by that version, so
+intermediates, and output tables are keyed partly by that version, so
 textures reuses a stored result only while the contract it was produced under
 is current.
 

@@ -10,7 +10,7 @@ import sys
 from collections.abc import Sequence
 from pathlib import Path
 
-from textures import __version__, environment, installation
+from textures import __version__, api, environment, installation
 from textures.definitions import Definitions, init_store
 from textures.engine import (
     Executor,
@@ -144,14 +144,7 @@ def _settings(args: argparse.Namespace, **overrides: object) -> Settings:
     """Resolve settings and set the process environment that textures controls."""
     flags = {key: getattr(args, key) for key in PATH_FLAGS}
     flags.update({key: value for key, value in overrides.items() if value is not None})
-    installed = installation.current()
-    settings = resolve_settings(
-        flags,
-        installation=installed.settings if installed else None,
-        installation_source=installed.source if installed else "installation",
-    )
-    environment.apply(settings)
-    return settings
+    return api.settings(flags)
 
 
 def _show(value: object) -> str:
@@ -370,20 +363,13 @@ def inputs_check(args: argparse.Namespace) -> int:
     return 0
 
 
-def _definitions(settings: Settings) -> Definitions:
-    """Load the selected definitions store, or the packaged definitions if it does not exist."""
-    if settings.definitions.is_dir():
-        return Definitions.load(settings.definitions)
-    return Definitions.packaged()
-
-
 def _stores(settings: Settings) -> tuple[EntryStore, EntryStore]:
     return EntryStore(settings.items), EntryStore(settings.resource_store)
 
 
 def _plan(args: argparse.Namespace):
     settings = _settings(args)
-    definitions = _definitions(settings)
+    definitions = api.load_definitions(settings)
     plan = plan_request(settings, definitions, args.name, args.workflow, args.modules)
     return settings, plan
 
@@ -477,10 +463,7 @@ def run_command(args: argparse.Namespace) -> int:
         return _submit(args, settings, plan)
     if args.workers is not None:
         raise TexturesError("--workers applies only to Slurm execution")
-    items, resources = _stores(settings)
-    executor = Executor(
-        plan, items, resources, RunContext(settings.device, settings.hf_cache), _progress
-    )
+    executor = api.local_executor(plan, settings, _progress)
     return _report_run(plan, executor, *run_request(plan, executor, args.modules))
 
 
@@ -519,7 +502,11 @@ def worker_command(args: argparse.Namespace) -> int:
     settings = resolve_settings(flags)
     environment.apply(settings)
     plan = plan_request(
-        settings, _definitions(settings), request["input"], request["workflow"], request["modules"]
+        settings,
+        api.load_definitions(settings),
+        request["input"],
+        request["workflow"],
+        request["modules"],
     )
     if plan.table_identity != job.table_identity:
         raise TexturesError(
@@ -555,7 +542,7 @@ def _report_run(plan, executor: Executor, directory: Path, written: bool) -> int
 
 def _table_statuses(args: argparse.Namespace, names) -> list[TableStatus]:
     settings = _settings(args)
-    definitions = _definitions(settings)
+    definitions = api.load_definitions(settings)
     return table_statuses(settings.derivatives, replanner(settings, definitions), names)
 
 

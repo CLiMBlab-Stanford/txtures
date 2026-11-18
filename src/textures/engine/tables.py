@@ -19,10 +19,10 @@ import math
 import os
 import shutil
 import tempfile
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
@@ -32,6 +32,9 @@ from textures.engine.execution import Executor
 from textures.engine.planning import Plan, PlannedVariant, plan_request
 from textures.errors import TexturesError
 from textures.store import MANIFEST, lock, make_shared_dir, now, read_json, write_json
+
+if TYPE_CHECKING:
+    import pandas as pd
 
 COLUMNS_SUFFIX = ".columns.tsv"
 
@@ -121,6 +124,54 @@ def table_is_current(plan: Plan) -> bool:
     )
 
 
+def table_header(plan: Plan) -> list[str]:
+    """The output table's column names: location, metadata, then features."""
+    corpus = plan.corpus
+    has_sentences = any(document.sentences for document in corpus.documents)
+    base = ["doc_id", *(["sentence_id"] if has_sentences else []), "region_index", "region"]
+    header = [*base, "char_start", "char_end", *corpus.metadata_columns]
+    return header + [column.name for column in plan.columns]
+
+
+def table_rows(plan: Plan, executor: Executor) -> Iterator[list[Any]]:
+    """Yield the output table's rows, one per region, computing results as needed.
+
+    Results are released after each document, so memory use does not grow
+    with the input.
+
+    Raises:
+        TexturesError: A module returned columns of the wrong length or omitted
+            a feature.
+    """
+    corpus = plan.corpus
+    has_sentences = any(document.sentences for document in corpus.documents)
+    column_variants = plan.column_variants()
+    for document in corpus.documents:
+        features = _document_columns(document, column_variants, executor)
+        sentence_of = _sentence_ids(document)
+        for index, (start, end) in enumerate(document.regions):
+            metadata = (
+                document.region_metadata[index] if document.region_metadata else document.metadata
+            )
+            values: list[Any] = [document.doc_id]
+            if has_sentences:
+                values.append(sentence_of[index] if sentence_of else None)
+            values += [index + 1, document.text[start:end], start, end]
+            values += [metadata.get(name) for name in corpus.metadata_columns]
+            values += [feature[index] for feature in features]
+            yield values
+        executor.forget()
+
+
+def table_frame(plan: Plan, executor: Executor) -> pd.DataFrame:
+    """Assemble the output table in memory, with the columns and values `write_table` writes."""
+    import pandas as pd
+
+    header = table_header(plan)
+    frame = pd.DataFrame(list(table_rows(plan, executor)), columns=header)
+    return _typed(frame, [column.name for column in plan.columns])
+
+
 def write_table(plan: Plan, executor: Executor, modules: Sequence[str] | None) -> Path:
     """Assemble the plan's output table from results and publish it atomically.
 
@@ -129,38 +180,17 @@ def write_table(plan: Plan, executor: Executor, modules: Sequence[str] | None) -
             a feature.
     """
     corpus = plan.corpus
-    has_sentences = any(document.sentences for document in corpus.documents)
-    base = ["doc_id", *(["sentence_id"] if has_sentences else []), "region_index", "region"]
-    header = [*base, "char_start", "char_end", *corpus.metadata_columns]
-    header += [column.name for column in plan.columns]
-    column_variants = plan.column_variants()
-
     directory = plan.table_directory
     directory.parent.mkdir(parents=True, exist_ok=True)
     staging = Path(tempfile.mkdtemp(prefix=f".{directory.name}.", dir=directory.parent))
     try:
         with (staging / f"{corpus.name}.tsv").open("w", encoding="utf-8", newline="") as handle:
-            handle.write("\t".join(header) + "\n")
-            for document in corpus.documents:
-                features = _document_columns(document, column_variants, executor)
-                sentence_of = _sentence_ids(document)
-                for index, (start, end) in enumerate(document.regions):
-                    metadata = (
-                        document.region_metadata[index]
-                        if document.region_metadata
-                        else document.metadata
-                    )
-                    values: list[Any] = [document.doc_id]
-                    if has_sentences:
-                        values.append(sentence_of[index] if sentence_of else None)
-                    values += [index + 1, document.text[start:end], start, end]
-                    values += [metadata.get(name) for name in corpus.metadata_columns]
-                    values += [feature[index] for feature in features]
-                    handle.write(_row(values))
-                executor.forget()
+            handle.write("\t".join(table_header(plan)) + "\n")
+            for values in table_rows(plan, executor):
+                handle.write(_row(values))
         with (staging / f"{corpus.name}{COLUMNS_SUFFIX}").open("w", encoding="utf-8") as handle:
             handle.write("column\tmodule\tfeature\tlabels\tvariant\n")
-            for column, planned in column_variants:
+            for column, planned in plan.column_variants():
                 labels = ";".join(
                     f"{label.module}.{label.source}={label.value}"
                     for label in column.variant.labels
@@ -176,6 +206,69 @@ def write_table(plan: Plan, executor: Executor, modules: Sequence[str] | None) -
         shutil.rmtree(staging, ignore_errors=True)
         raise
     return directory
+
+
+# Reading tables back
+
+INTEGER_COLUMNS = ("region_index", "char_start", "char_end")
+
+
+def _typed(frame: pd.DataFrame, features: Sequence[str]) -> pd.DataFrame:
+    """Give location columns fixed types and feature columns numeric or Boolean types."""
+    for name in frame.columns:
+        if name in INTEGER_COLUMNS:
+            frame[name] = frame[name].astype("int64")
+        elif name not in features:
+            frame[name] = frame[name].astype(object)
+    return frame
+
+
+def _parse_feature(values: pd.Series) -> pd.Series:
+    """Parse a feature column written by `format_value`: Boolean, integer, float, or text."""
+    import pandas as pd
+
+    present = values[values != "NA"]
+    if len(present) and present.isin(["TRUE", "FALSE"]).all():
+        return values.map({"TRUE": True, "FALSE": False, "NA": pd.NA}).astype("boolean")
+    try:
+        if len(present) == len(values) and len(values):
+            return values.map(int).astype("int64")
+    except ValueError:
+        pass
+    try:
+        return values.map(lambda value: math.nan if value == "NA" else float(value))
+    except ValueError:
+        return values.where(values != "NA", None)
+
+
+def read_table(path: Path | str) -> pd.DataFrame:
+    """Read an output table written by textures, keeping its values exact.
+
+    `path` is a table directory or its `NAME.tsv` file. Location and metadata
+    columns are read as text, so a region such as `NA` or `null` stays a
+    string; only feature columns, listed in `NAME.columns.tsv`, treat `NA` as
+    missing and `Inf` as infinite.
+
+    Raises:
+        TexturesError: `path` is not an output table.
+    """
+    path = Path(path)
+    if path.is_dir():
+        tables = [p for p in path.glob("*.tsv") if not p.name.endswith(COLUMNS_SUFFIX)]
+        if len(tables) != 1:
+            raise TexturesError(f"{path} is not an output table directory")
+        path = tables[0]
+    columns_file = path.with_name(path.name.removesuffix(".tsv") + COLUMNS_SUFFIX)
+    if not path.is_file() or not columns_file.is_file():
+        raise TexturesError(f"{path} is not an output table: {columns_file.name} is missing")
+    import pandas as pd
+
+    options = {"sep": "\t", "dtype": str, "keep_default_na": False, "quoting": 3}
+    features = list(pd.read_csv(columns_file, **options)["column"])
+    frame = pd.read_csv(path, **options)
+    for name in features:
+        frame[name] = _parse_feature(frame[name])
+    return _typed(frame, features)
 
 
 def _sentence_ids(document) -> list[str]:

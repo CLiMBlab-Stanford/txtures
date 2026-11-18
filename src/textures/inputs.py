@@ -19,7 +19,7 @@ import hashlib
 import json
 import re
 import unicodedata
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -540,3 +540,89 @@ def load_input(root: Path, name: str) -> InputReport:
     if name in inventory.problems:
         raise InputError(inventory.problems[name])
     return read_input(inventory.inputs[name])
+
+
+# Text given directly
+
+MEMORY_LAYOUT = "memory"
+
+
+def read_texts(
+    texts: str | Sequence[str | Sequence[str]] | Mapping[str, str | Sequence[str]],
+    settings: InputSettings | None = None,
+    name: str = "texts",
+) -> InputReport:
+    """Read documents given in memory, as `tx.compute` receives them.
+
+    `texts` is one document, a sequence of documents (with IDs `1`, `2`, ...),
+    or a mapping from document ID to document. A document is either a string,
+    divided by the delimiters in `settings` like a line of a `.txt` input, or
+    a sequence of region strings, which are joined with the region joiner.
+
+    Never raises for invalid content; problems are returned in the report.
+    """
+    settings = settings or InputSettings()
+    report = _Report()
+    if isinstance(texts, str):
+        entries: list[tuple[str, object]] = [("1", texts)]
+    elif isinstance(texts, Mapping):
+        entries = [(str(doc_id), value) for doc_id, value in texts.items()]
+    else:
+        entries = [(str(number), value) for number, value in enumerate(texts, start=1)]
+    documents = []
+    seen: set[str] = set()
+    for doc_id, value in entries:
+        location = f"document {doc_id}"
+        if not doc_id.strip() or any(char in doc_id for char in "\t\n\r"):
+            report.error(location, "document IDs must be non-empty and contain no tabs or breaks")
+            continue
+        if doc_id in seen:
+            report.error(location, "document ID repeats")
+            continue
+        seen.add(doc_id)
+        if isinstance(value, str):
+            builder = _split_document(value, settings, location, report)
+        elif isinstance(value, Sequence) and all(isinstance(region, str) for region in value):
+            builder = _region_list(value, settings, location, report)
+        else:
+            report.error(location, "must be a string or a sequence of region strings")
+            continue
+        if builder is not None:
+            _check_text("".join(builder.parts), location, report)
+            documents.append(builder.build(doc_id))
+    if not entries:
+        report.error(name, "contains no documents")
+    if report.problems:
+        return InputReport(name, None, tuple(report.problems), tuple(report.warnings))
+    corpus = Corpus(
+        name=name,
+        layout=MEMORY_LAYOUT,
+        documents=tuple(documents),
+        metadata_columns=(),
+        digest=digest(
+            {
+                "reader": READER_VERSION,
+                "documents": [[d.doc_id, d.digest] for d in documents],
+                "settings": settings.model_dump(mode="json"),
+            }
+        ),
+    )
+    return InputReport(name, corpus, (), tuple(report.warnings))
+
+
+def _region_list(
+    regions: Sequence[str], settings: InputSettings, location: str, report: _Report
+) -> _DocumentBuilder | None:
+    builder = _DocumentBuilder(settings)
+    builder.start_sentence(None)
+    ok = bool(regions)
+    if not regions:
+        report.error(location, "document is empty")
+    for number, region in enumerate(regions, start=1):
+        region = region.strip()
+        if not region or any(char in region for char in "\t\n\r"):
+            report.error(location, f"region {number} is empty or contains a tab or line break")
+            ok = False
+            continue
+        builder.add_region(region)
+    return builder if ok else None

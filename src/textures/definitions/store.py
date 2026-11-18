@@ -38,16 +38,20 @@ ALLOWED_TOP_LEVEL = {"site", CONFIGS, WORKFLOWS, "README.md", ".git", ".gitignor
 class Definition:
     """The raw body of one config or workflow and where it came from.
 
-    `path` is `None` for definitions packaged with textures.
+    `path` is `None` for definitions that are not files: those packaged with
+    textures, and those given to the Python API, which `source` names.
     """
 
     id: str
     body: dict[str, Any]
     path: Path | None
+    source: str | None = None
 
     @property
     def location(self) -> str:
-        return str(self.path) if self.path is not None else f"packaged {self.id}"
+        if self.path is not None:
+            return str(self.path)
+        return self.source or f"packaged {self.id}"
 
 
 @dataclass

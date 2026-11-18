@@ -33,6 +33,27 @@ settings, and follow the job with `textures status`.
 Run `./install --help` for every option and `textures site show` to see the
 resulting settings. For gated models, run `textures hf login` once.
 
+## Use
+
+Put a file of sentences, one per line, in the inputs directory as
+`gardenpath.txt`, then:
+
+```bash
+textures run gardenpath
+```
+
+This writes a table with one row per word and its surprisal under GPT-2 to
+the derivatives directory. From Python:
+
+```python
+import textures as tx
+
+table = tx.compute("surprisal", ["The horse raced past the barn fell."])
+```
+
+See the [documentation](docs/README.md), starting with
+[Getting started](docs/getting-started.md).
+
 ## Development
 
 ```bash

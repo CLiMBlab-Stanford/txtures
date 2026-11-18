@@ -215,3 +215,27 @@ def test_gpt2_golden_values(tmp_path):
         # Golden values were computed on CPU in float32; other devices and
         # library versions differ by far less than 1e-3 bits.
         np.testing.assert_allclose(values, expected, atol=1e-3)
+
+
+def test_compute_through_the_api_matches_golden_values(tmp_path, monkeypatch):
+    from huggingface_hub import constants
+
+    import textures as tx
+
+    # Share the Hugging Face cache the other tests use, so GPT-2 is not
+    # downloaded again into the temporary resources directory.
+    hub = Path(constants.HF_HUB_CACHE)
+    hub.mkdir(parents=True, exist_ok=True)
+    (tmp_path / "resources" / "huggingface").mkdir(parents=True)
+    (tmp_path / "resources" / "huggingface" / "hub").symlink_to(hub)
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "home" / ".config"))
+    for key in ("definitions", "inputs", "derivatives", "items", "resources"):
+        monkeypatch.setenv(f"TEXTURES_{key.upper()}", str(tmp_path / key))
+
+    config = {"lm_scores": {"model": "gpt2", "revision": GPT2_REVISION}}
+    table = tx.compute("surprisal", list(GOLDEN), config=config, device="cpu")
+    for doc_id, expected in enumerate(GOLDEN.values(), start=1):
+        values = table.loc[table["doc_id"] == str(doc_id), "surprisal"]
+        np.testing.assert_allclose(values, expected, atol=1e-3)
+    assert (tmp_path / "items" / "lm_scores").is_dir()
