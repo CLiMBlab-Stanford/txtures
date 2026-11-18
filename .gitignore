@@ -1,5 +1,7 @@
 # Python environments, bytecode, and package builds
 /.venv/
+/txtures-install/
+/.pytest-slurm/
 __pycache__/
 *.py[cod]
 *.egg-info/
@@ -13,6 +15,7 @@ __pycache__/
 .coverage.*
 /htmlcov/
 /docs/_build/
+/site/
 .ipynb_checkpoints/
 
 # Local plans and agent workspace state; repository policy files remain tracked
@@ -21,12 +24,12 @@ __pycache__/
 /.codex/
 /.claude/
 
-# Local textures stores and outputs created while developing
+# Local txtures stores and outputs created while developing
 /inputs/
 /derivatives/
 /resources/
 /items/
-/textures.yml
+/txtures.yml
 
 # Environment secrets; keep example files available for version control
 .env

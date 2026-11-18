@@ -25,15 +25,15 @@ from typing import Any
 
 from pydantic import ValidationError
 
-from textures.definitions.store import (
+from txtures.definitions.store import (
     ID_PATTERN,
     Definition,
     StoreContents,
     read_store,
 )
-from textures.errors import DefinitionError, Problem
-from textures.identity import digest
-from textures.modules import REGISTRY, Module, ModuleConfig, Registry
+from txtures.errors import DefinitionError, Problem
+from txtures.identity import digest
+from txtures.modules import REGISTRY, Module, ModuleConfig, Registry
 
 LABEL_PATTERN = re.compile(r"[A-Za-z][A-Za-z0-9_]*")
 """Pattern for variant labels, which become parts of column names."""
@@ -320,7 +320,7 @@ class Definitions:
         """Read the store at `root`. Layout problems are kept for `validate`.
 
         Raises:
-            TexturesError: `root` is not a directory.
+            TxturesError: `root` is not a directory.
         """
         return cls(read_store(root, registry), registry)
 

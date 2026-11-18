@@ -13,19 +13,57 @@ jobs:
   checks:
     name: Format, lint, and test
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     steps:
       - name: Check out the source
         uses: actions/checkout@v4
       - name: Install uv
         uses: astral-sh/setup-uv@v6
         with:
+          version: "0.13.9"
           enable-cache: true
-      - name: Install textures and development dependencies
-        run: uv sync --frozen --group dev --python 3.12
+      - name: Install txtures and development dependencies
+        run: uv sync --frozen --group dev --extra cpu
       - name: Check formatting
         run: uv run --frozen ruff format --check src tests .github/workflows
       - name: Check Python style
         run: uv run --frozen ruff check src tests .github/workflows
       - name: Run complete test suite
         run: uv run --frozen pytest -q -m "integration or not integration"
+
+  docs:
+    name: Documentation
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out the source
+        uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.13.9"
+      - name: Build the documentation as Read the Docs does
+        run: >-
+          uv run --no-project --with-requirements docs/requirements.txt
+          mkdocs build --strict
+
+  package:
+    name: Package
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out the source
+        uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.13.9"
+      - name: Build the source distribution and wheel
+        run: uv build
+      - name: Check the distributions' metadata
+        run: uvx twine@6.2.0 check --strict dist/*
+      - name: Install the wheel and run the command
+        run: |
+          uv venv --python 3.12 /tmp/wheel-env
+          uv pip install --python /tmp/wheel-env dist/*.whl
+          /tmp/wheel-env/bin/txtures --version

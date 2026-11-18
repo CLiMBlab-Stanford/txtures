@@ -70,7 +70,7 @@ pull-request metadata, not in ordinary technical documentation.
 
 ## Scientific correctness
 
-textures computes measurements that end up in published analyses. A change
+txtures computes measurements that end up in published analyses. A change
 that alters computed values must be deliberate, tested, and reflected in the
 affected module's output-contract version so that cached results are not
 reused silently. Test numerical behavior against an independent reference

@@ -1,0 +1,30 @@
+site_name: txtures
+site_description: Word- and region-level features of text for psycholinguistic research
+site_url: https://txtures.readthedocs.io/
+repo_url: https://github.com/CLiMBlab-Stanford/txtures
+edit_uri: blob/main/docs/
+docs_dir: docs
+exclude_docs: requirements.txt
+theme:
+  name: readthedocs
+nav:
+  - Home: README.md
+  - Getting started: getting-started.md
+  - Inputs: inputs.md
+  - Definitions: definitions.md
+  - Surprisal: surprisal.md
+  - Output tables: outputs.md
+  - Settings: settings.md
+  - Slurm: slurm.md
+  - Python API: python.md
+markdown_extensions:
+  - toc:
+      permalink: true
+  - tables
+  - fenced_code
+validation:
+  links:
+    not_found: warn
+    anchors: warn
+    absolute_links: warn
+    unrecognized_links: warn

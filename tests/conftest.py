@@ -1,6 +1,16 @@
+import os
 from pathlib import Path
 
 import pytest
+
+
+@pytest.fixture(autouse=True)
+def restore_environment():
+    """Undo changes to the process environment, which the command line controls."""
+    saved = dict(os.environ)
+    yield
+    os.environ.clear()
+    os.environ.update(saved)
 
 
 def write(path: Path, text: str) -> Path:

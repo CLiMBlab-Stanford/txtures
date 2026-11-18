@@ -1,20 +1,28 @@
 # Contributing
 
-These rules apply to everyone who contributes to textures, including people
+These rules apply to everyone who contributes to txtures, including people
 working with AI tools. They cover how to disclose AI assistance, which
 identities may appear on commits and pull requests, how to write
 documentation, how to change computed values, and how releases are made.
 
 ## Development setup
 
-textures uses [uv](https://docs.astral.sh/uv/) to manage its environment.
-From a checkout:
+`./install --dev` builds a self-contained installation with the development
+tools; see the README. To work with your own uv instead, from a checkout:
 
 ```bash
-uv sync --group dev
+uv sync --group dev --extra cpu   # or --extra cuda
 uv run pytest -q
 uv run ruff format --check src tests
 uv run ruff check src tests
+```
+
+Tests marked `integration` download tokenizers and small models from the
+Hugging Face hub and are skipped by default. Run them before changing
+tokenization, scoring, or surprisal code:
+
+```bash
+uv run pytest -q -m integration
 ```
 
 ## AI-assisted contributions
@@ -92,15 +100,15 @@ metadata, not in ordinary technical documentation.
 ## Changes to computed values
 
 Every module declares an output-contract version. Cached resources, item
-intermediates, and project outputs are keyed partly by that version, so
-textures reuses a stored result only while the contract it was produced under
+intermediates, and output tables are keyed partly by that version, so
+txtures reuses a stored result only while the contract it was produced under
 is current.
 
 Increment a module's contract version in the same change whenever the change
 can alter what the module computes or stores: a corrected formula, a different
 default, a new tokenization rule, or a changed file layout. Do not increment it
 for changes that cannot affect stored results, such as refactoring, logging, or
-error messages. textures cannot detect whether an arbitrary code edit is
+error messages. txtures cannot detect whether an arbitrary code edit is
 scientifically neutral, so this decision belongs to the contributor and the
 reviewer. State it in the pull request.
 
@@ -122,10 +130,14 @@ Use patch releases for compatible fixes. During the 0.x series, use minor
 releases for new features and intentional interface changes. Document
 intentional incompatibilities and migration steps in the pull request.
 
-After the merge, tag the release as `vMAJOR.MINOR.PATCH` and push the tag. Do
-not move or replace an existing release. The tag workflow checks the package
-version and its ancestry on `main`, then creates the corresponding GitHub
-Release.
+After the merge, tag the release as an annotated `vMAJOR.MINOR.PATCH` tag on
+`main` and push the tag. Do not move or replace an existing release. The tag
+workflow checks the package version and its ancestry on `main`, builds the
+source distribution and wheel, publishes them to PyPI through trusted
+publishing (the `pypi` environment; no token is stored), and then creates the
+corresponding GitHub Release with the distributions attached. Read the Docs
+builds the documentation from `.readthedocs.yaml` and `mkdocs.yml` on every
+push to `main` and for every tag.
 
 After the workflow succeeds, edit the GitHub Release so that it begins with a
 concise, human-written summary of the important changes. Generated notes may

@@ -2,11 +2,11 @@
 
 A definitions store is a directory with this layout::
 
-    site/site.yml             site settings (see `textures.settings`)
+    site/site.yml             site settings (see `txtures.settings`)
     configs/MODULE/ID.yml     scientific configs, one directory per module
     workflows/ID.yml          workflows
 
-This module reads the files and checks the layout. `textures.definitions.resolution`
+This module reads the files and checks the layout. `txtures.definitions.resolution`
 interprets their contents.
 """
 
@@ -20,10 +20,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from textures.errors import Problem, TexturesError
-from textures.modules import Registry
-from textures.settings import SITE_DOCUMENT
-from textures.yamlio import YamlError, load_mapping
+from txtures.errors import Problem, TxturesError
+from txtures.modules import Registry
+from txtures.settings import SITE_DOCUMENT
+from txtures.yamlio import YamlError, load_mapping
 
 ID_PATTERN = re.compile(r"[A-Za-z][A-Za-z0-9_]*")
 """Pattern for config and workflow IDs, which are also file stems."""
@@ -38,16 +38,20 @@ ALLOWED_TOP_LEVEL = {"site", CONFIGS, WORKFLOWS, "README.md", ".git", ".gitignor
 class Definition:
     """The raw body of one config or workflow and where it came from.
 
-    `path` is `None` for definitions packaged with textures.
+    `path` is `None` for definitions that are not files: those packaged with
+    txtures, and those given to the Python API, which `source` names.
     """
 
     id: str
     body: dict[str, Any]
     path: Path | None
+    source: str | None = None
 
     @property
     def location(self) -> str:
-        return str(self.path) if self.path is not None else f"packaged {self.id}"
+        if self.path is not None:
+            return str(self.path)
+        return self.source or f"packaged {self.id}"
 
 
 @dataclass
@@ -89,11 +93,11 @@ def read_store(root: Path, registry: Registry) -> StoreContents:
     all at once.
 
     Raises:
-        TexturesError: `root` is not a directory.
+        TxturesError: `root` is not a directory.
     """
     if not root.is_dir():
-        raise TexturesError(
-            f"definitions store {root} does not exist; create it with `textures def init`"
+        raise TxturesError(
+            f"definitions store {root} does not exist; create it with `txtures def init`"
         )
     contents = StoreContents(root)
     for entry in sorted(root.iterdir()):
@@ -127,18 +131,27 @@ def read_store(root: Path, registry: Registry) -> StoreContents:
 
 
 SITE_TEMPLATE = """\
-# Site settings for textures. They choose storage locations and execution
+# Site settings for txtures. They choose storage locations and execution
 # limits and never change computed values. Relative paths resolve against
 # this file's directory. Uncomment a line to override the built-in default.
 #
 # inputs: /path/to/inputs
 # derivatives: /path/to/derivatives
-# resources: /path/to/resources
 # items: /path/to/items
-# hf_cache: /path/to/huggingface/cache
+# resources: /path/to/txtures-resources
 # execution:
 #   device: auto
+#   executor: local
 #   max_variants: 64
+# slurm:
+#   partition: gpu
+#   account: mylab
+#   time_hours: 24
+#   memory_gb: 32
+#   cpus: 4
+#   gpus: 1
+#   workers: 1
+#   options: ["--exclude=node1"]
 """
 
 EXAMPLE_CONFIG = """\
@@ -155,15 +168,17 @@ lm_scores: pythia410m
 """
 
 README = """\
-# textures definitions
+# txtures definitions
 
-This store holds textures site settings and scientific definitions.
+This store holds txtures site settings and scientific definitions.
 
 - `site/site.yml`: storage locations and execution limits.
 - `configs/MODULE/ID.yml`: configs for one module.
 - `workflows/ID.yml`: workflows, which select a config for each module.
 
-Run `textures def validate` after editing.
+Run `txtures def validate` after editing. Each user selects this store
+once with `txtures site use PATH`, and its site settings then choose the
+shared locations.
 """
 
 
@@ -174,13 +189,13 @@ def init_store(root: Path) -> None:
     place, so an interrupted call leaves no partial store at `root`.
 
     Raises:
-        TexturesError: `root` already exists, or its parent does not.
+        TxturesError: `root` already exists, or its parent does not.
     """
     if root.exists() or root.is_symlink():
-        raise TexturesError(f"refusing to create definitions store: {root} already exists")
+        raise TxturesError(f"refusing to create definitions store: {root} already exists")
     parent = root.parent
     if not parent.is_dir():
-        raise TexturesError(f"cannot create definitions store: {parent} does not exist")
+        raise TxturesError(f"cannot create definitions store: {parent} does not exist")
     staging = Path(tempfile.mkdtemp(prefix=f".{root.name}.", dir=parent))
     try:
         files = {
@@ -195,7 +210,7 @@ def init_store(root: Path) -> None:
             path.write_text(text, encoding="utf-8")
         os.chmod(staging, 0o777 & ~_umask())
         if root.exists():
-            raise TexturesError(f"refusing to create definitions store: {root} already exists")
+            raise TxturesError(f"refusing to create definitions store: {root} already exists")
         os.rename(staging, root)
     except BaseException:
         shutil.rmtree(staging, ignore_errors=True)

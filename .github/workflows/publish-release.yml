@@ -1,4 +1,4 @@
-name: Publish GitHub release
+name: Publish release
 
 on:
   push:
@@ -6,12 +6,13 @@ on:
       - "v*.*.*"
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  publish:
-    name: Publish release
+  build:
+    name: Validate the tag and build
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - name: Check out the tagged source
         uses: actions/checkout@v4
@@ -24,16 +25,66 @@ jobs:
             "refs/tags/${GITHUB_REF_NAME}:refs/tags/${GITHUB_REF_NAME}"
       - name: Validate the release tag
         run: python3 .github/workflows/check_release_tag.py "$GITHUB_REF_NAME"
-      - name: Create the GitHub Release
+      - name: Install uv
+        uses: astral-sh/setup-uv@v6
+        with:
+          version: "0.13.9"
+      - name: Build the source distribution and wheel
+        run: uv build
+      - name: Check the distributions' metadata
+        run: uvx twine@6.2.0 check --strict dist/*
+      - name: Keep the distributions for the publishing jobs
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
+
+  pypi:
+    name: Publish to PyPI
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # PyPI trusts this repository, workflow, and environment (trusted
+    # publishing), so no token is stored.
+    environment:
+      name: pypi
+      url: https://pypi.org/project/txtures/
+    permissions:
+      id-token: write
+    steps:
+      - name: Fetch the distributions
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - name: Upload to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+
+  github-release:
+    name: Create the GitHub Release
+    needs: pypi
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Fetch the distributions
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - name: Create the release with the distributions attached
         env:
           GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
         run: |
           if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
             echo "GitHub Release $GITHUB_REF_NAME already exists"
           else
-            gh release create "$GITHUB_REF_NAME" \
+            gh release create "$GITHUB_REF_NAME" dist/* \
               --verify-tag \
-              --title "textures ${GITHUB_REF_NAME#v}" \
+              --title "txtures ${GITHUB_REF_NAME#v}" \
               --generate-notes \
               --latest
           fi
