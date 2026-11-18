@@ -11,6 +11,7 @@ from pathlib import Path
 from textures import __version__
 from textures.definitions import Definitions, init_store
 from textures.errors import Problem, SettingsError, TexturesError
+from textures.inputs import InputReport, load_input, read_input, scan_inputs
 from textures.settings import Settings, resolve_settings
 
 PATH_FLAGS = {
@@ -58,6 +59,16 @@ def build_parser() -> argparse.ArgumentParser:
     )
     validate.add_argument("--json", action="store_true", help="print JSON")
     validate.set_defaults(handler=def_validate)
+
+    inputs = commands.add_parser("inputs", help="list and check input files")
+    input_commands = inputs.add_subparsers(dest="inputs_command", metavar="COMMAND", required=True)
+    listing = input_commands.add_parser("list", help="list inputs with their sizes and status")
+    listing.add_argument("--json", action="store_true", help="print JSON")
+    listing.set_defaults(handler=inputs_list)
+    check = input_commands.add_parser("check", help="validate one input and summarize it")
+    check.add_argument("name", help="input basename")
+    check.add_argument("--json", action="store_true", help="print JSON")
+    check.set_defaults(handler=inputs_check)
     return parser
 
 
@@ -119,10 +130,89 @@ def def_validate(args: argparse.Namespace) -> int:
     elif problems:
         for problem in problems:
             print(problem)
+        sys.stdout.flush()
         print(f"{len(problems)} problem(s) in definitions store {store}", file=sys.stderr)
     else:
         print(f"definitions store {store} is valid")
     return 1 if problems else 0
+
+
+def _summary(report: InputReport) -> dict[str, object]:
+    corpus = report.corpus
+    return {
+        "name": report.name,
+        "valid": corpus is not None,
+        "layout": corpus.layout if corpus else None,
+        "documents": len(corpus.documents) if corpus else None,
+        "sentences": corpus.sentence_count if corpus else None,
+        "regions": corpus.region_count if corpus else None,
+        "metadata_columns": list(corpus.metadata_columns) if corpus else None,
+        "digest": corpus.digest if corpus else None,
+        "problems": [str(problem) for problem in report.problems],
+        "warnings": [str(warning) for warning in report.warnings],
+    }
+
+
+def inputs_list(args: argparse.Namespace) -> int:
+    """List every input with its layout, size, and validity."""
+    root = _settings(args).inputs
+    inventory = scan_inputs(root)
+    reports = []
+    for name, entry in inventory.inputs.items():
+        if name in inventory.problems:
+            reports.append(InputReport(name, None, tuple(inventory.problems[name]), ()))
+        else:
+            reports.append(read_input(entry))
+    summaries = [_summary(report) for report in reports]
+    if args.json:
+        payload = {
+            "inputs_directory": str(root),
+            "inputs": summaries,
+            "ignored": [str(path) for path in inventory.ignored],
+        }
+        print(json.dumps(payload, indent=2))
+        return 0
+    if not summaries:
+        print(f"no inputs in {root}")
+    for summary in summaries:
+        if summary["valid"]:
+            status = f"{len(summary['warnings'])} warning(s)" if summary["warnings"] else "ok"
+            print(
+                f"{summary['name']}  {summary['layout']}  {summary['documents']} documents  "
+                f"{summary['regions']} regions  {str(summary['digest'])[:12]}  {status}"
+            )
+        else:
+            print(f"{summary['name']}  invalid: {len(summary['problems'])} problem(s)")
+    for path in inventory.ignored:
+        print(f"ignored: {path.name}")
+    return 0
+
+
+def inputs_check(args: argparse.Namespace) -> int:
+    """Validate one input and print its problems, warnings, and a summary."""
+    report = load_input(_settings(args).inputs, args.name)
+    summary = _summary(report)
+    if args.json:
+        print(json.dumps(summary, indent=2))
+        return 0 if summary["valid"] else 1
+    for problem in report.problems:
+        print(f"error: {problem}")
+    for warning in report.warnings:
+        print(f"warning: {warning}")
+    if report.corpus is None:
+        sys.stdout.flush()
+        print(f"{report.name} is invalid: {len(report.problems)} problem(s)", file=sys.stderr)
+        return 1
+    corpus = report.corpus
+    print(f"{corpus.name}: {corpus.layout}")
+    print(f"  documents: {len(corpus.documents)}")
+    if corpus.sentence_count:
+        print(f"  sentences: {corpus.sentence_count}")
+    print(f"  regions: {corpus.region_count}")
+    if corpus.metadata_columns:
+        print(f"  metadata columns: {', '.join(corpus.metadata_columns)}")
+    print(f"  digest: {corpus.digest}")
+    return 0
 
 
 def main(argv: Sequence[str] | None = None) -> int:

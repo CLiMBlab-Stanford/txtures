@@ -67,3 +67,36 @@ def test_def_validate_uses_the_stores_variant_limit(capsys, tmp_path):
 def test_errors_are_reported_without_tracebacks(capsys):
     assert main(["def", "validate"]) == 1
     assert "textures: error: definitions store" in capsys.readouterr().err
+
+
+def test_inputs_list_reports_valid_invalid_and_ignored(capsys, tmp_path):
+    root = tmp_path / "inputs"
+    write(root / "good.txt", "The horse raced.\n")
+    write(root / "bad.txt", "a\n\nb\n")
+    write(root / "notes.md", "")
+    assert main(["--inputs", str(root), "inputs", "list", "--json"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    by_name = {entry["name"]: entry for entry in payload["inputs"]}
+    assert by_name["good"]["valid"] is True
+    assert (by_name["good"]["documents"], by_name["good"]["regions"]) == (1, 3)
+    assert by_name["bad"]["valid"] is False
+    assert payload["ignored"] == [str(root / "notes.md")]
+
+
+def test_inputs_check_summarizes_or_fails(capsys, tmp_path):
+    root = tmp_path / "inputs"
+    write(root / "r.tsv", "sentence_id\tregion\titem\n1\tThe horse\t7\n2\tfell.\t7\n")
+    write(root / "bad.tsv", "text\tregion\nx\ty\n")
+    assert main(["--inputs", str(root), "inputs", "check", "r"]) == 0
+    out = capsys.readouterr().out
+    assert "r: region-per-row" in out
+    assert "sentences: 2" in out
+    assert "metadata columns: item" in out
+    assert main(["--inputs", str(root), "inputs", "check", "bad"]) == 1
+    assert "has both text and region columns" in capsys.readouterr().out
+
+
+def test_inputs_check_unknown_name_is_an_error(capsys, tmp_path):
+    (tmp_path / "inputs").mkdir()
+    assert main(["--inputs", str(tmp_path / "inputs"), "inputs", "check", "nope"]) == 1
+    assert "no input named 'nope'" in capsys.readouterr().err
