@@ -13,7 +13,7 @@ def isolated_settings(monkeypatch, tmp_path):
     """Keep CLI tests away from the real home directory and lab storage."""
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "home" / ".config"))
-    for name in ("DEFINITIONS", "INPUTS", "DERIVATIVES", "RESOURCES", "ITEMS", "HF_CACHE"):
+    for name in ("DEFINITIONS", "INPUTS", "DERIVATIVES", "ITEMS", "RESOURCES"):
         monkeypatch.delenv(f"TEXTURES_{name}", raising=False)
     monkeypatch.setenv("TEXTURES_DEFINITIONS", str(tmp_path / "defs"))
 
@@ -32,14 +32,17 @@ def test_no_arguments_prints_help(capsys):
 
 def test_site_show_reports_sources(capsys, tmp_path):
     assert main(["--items", str(tmp_path / "items"), "site", "show", "--json"]) == 0
-    rows = {row["key"]: row for row in json.loads(capsys.readouterr().out)}
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["installation"] is None
+    rows = {row["key"]: row for row in payload["settings"]}
     assert rows["items"] == {
         "key": "items",
         "value": str(tmp_path / "items"),
         "source": "command line",
     }
     assert rows["definitions"]["source"] == "environment (TEXTURES_DEFINITIONS)"
-    assert rows["hf_cache"]["value"] is None
+    assert rows["resources"]["source"] == "default"
+    assert rows["execution.executor"]["value"] == "local"
 
 
 def test_def_init_then_validate(capsys, tmp_path):

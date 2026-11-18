@@ -133,11 +133,11 @@ SITE_TEMPLATE = """\
 #
 # inputs: /path/to/inputs
 # derivatives: /path/to/derivatives
-# resources: /path/to/resources
 # items: /path/to/items
-# hf_cache: /path/to/huggingface/cache
+# resources: /path/to/textures-resources
 # execution:
 #   device: auto
+#   executor: local
 #   max_variants: 64
 """
 

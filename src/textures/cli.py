@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
 import sys
 from collections.abc import Sequence
 from pathlib import Path
 
-from textures import __version__
+from textures import __version__, environment, installation
 from textures.definitions import Definitions, init_store
 from textures.engine import (
     Executor,
@@ -31,9 +32,8 @@ PATH_FLAGS = {
     "definitions": "definitions store",
     "inputs": "inputs directory",
     "derivatives": "derivatives directory",
-    "resources": "resource store",
     "items": "item-intermediate store",
-    "hf_cache": "Hugging Face cache",
+    "resources": "shared resources directory",
 }
 
 
@@ -110,31 +110,112 @@ def build_parser() -> argparse.ArgumentParser:
     gc = commands.add_parser("gc", help="remove stale and broken output tables")
     gc.add_argument("--dry-run", action="store_true", help="list what would be removed")
     gc.set_defaults(handler=gc_command)
+
+    hf = commands.add_parser("hf", help="manage your Hugging Face token for gated models")
+    hf_commands = hf.add_subparsers(dest="hf_command", metavar="COMMAND", required=True)
+    login = hf_commands.add_parser("login", help="save your token, read from the terminal or stdin")
+    login.set_defaults(handler=hf_login)
+    logout = hf_commands.add_parser("logout", help="delete your saved token")
+    logout.set_defaults(handler=hf_logout)
+    whoami = hf_commands.add_parser("whoami", help="show which account your token belongs to")
+    whoami.set_defaults(handler=hf_whoami)
     return parser
 
 
 def _settings(args: argparse.Namespace, **overrides: object) -> Settings:
+    """Resolve settings and set the process environment that textures controls."""
     flags = {key: getattr(args, key) for key in PATH_FLAGS}
     flags.update({key: value for key, value in overrides.items() if value is not None})
-    return resolve_settings(flags)
+    installed = installation.current()
+    settings = resolve_settings(
+        flags,
+        installation=installed.settings if installed else None,
+        installation_source=installed.source if installed else "installation",
+    )
+    environment.apply(settings)
+    return settings
 
 
 def site_show(args: argparse.Namespace) -> int:
-    """Print every resolved setting with its source."""
+    """Print the installation and every resolved setting with its source."""
     settings = _settings(args)
+    installed = installation.current()
     rows = [
-        (setting.key, "" if setting.value is None else str(setting.value), setting.source)
-        for setting in settings.values.values()
+        (setting.key, str(setting.value), setting.source) for setting in settings.values.values()
     ]
     if args.json:
-        payload = [
-            {"key": key, "value": value or None, "source": source} for key, value, source in rows
-        ]
+        payload = {
+            "installation": None
+            if installed is None
+            else {"prefix": str(installed.prefix), "compute": installed.compute},
+            "settings": [
+                {"key": key, "value": value, "source": source} for key, value, source in rows
+            ],
+        }
         print(json.dumps(payload, indent=2))
         return 0
+    if installed is None:
+        print("installation: none (running outside an ./install environment)")
+    else:
+        print(f"installation: {installed.prefix} ({installed.compute})")
     widths = [max(len(row[index]) for row in rows) for index in range(2)]
     for key, value, source in rows:
-        print(f"{key:<{widths[0]}}  {value or '(Hugging Face default)':<{widths[1]}}  {source}")
+        print(f"{key:<{widths[0]}}  {value:<{widths[1]}}  {source}")
+    return 0
+
+
+def hf_login(args: argparse.Namespace) -> int:
+    """Check a Hugging Face token and save it where only its owner can read it."""
+    import getpass
+
+    _settings(args)
+    if sys.stdin.isatty():
+        token = getpass.getpass("Hugging Face token: ").strip()
+    else:
+        token = sys.stdin.readline().strip()
+    if not token:
+        raise TexturesError("no token given")
+    from huggingface_hub import HfApi
+
+    try:
+        name = HfApi().whoami(token=token)["name"]
+    except Exception as error:
+        raise TexturesError(f"the hub rejected the token: {error}") from error
+    path = environment.token_path(os.environ, Path.home())
+    path.parent.mkdir(parents=True, exist_ok=True)
+    staging = path.with_name(f".{path.name}.tmp")
+    descriptor = os.open(staging, os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o600)
+    with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+        handle.write(token + "\n")
+    os.replace(staging, path)
+    print(f"saved the token for {name} to {path}")
+    return 0
+
+
+def hf_logout(args: argparse.Namespace) -> int:
+    _settings(args)
+    path = environment.token_path(os.environ, Path.home())
+    if path.exists():
+        path.unlink()
+        print(f"deleted {path}")
+    else:
+        print("no token is saved")
+    return 0
+
+
+def hf_whoami(args: argparse.Namespace) -> int:
+    _settings(args)
+    path = environment.token_path(os.environ, Path.home())
+    if not path.is_file():
+        print("no token is saved; run `textures hf login`")
+        return 1
+    from huggingface_hub import HfApi
+
+    try:
+        name = HfApi().whoami(token=path.read_text(encoding="utf-8").strip())["name"]
+    except Exception as error:
+        raise TexturesError(f"the hub rejected the saved token: {error}") from error
+    print(name)
     return 0
 
 
@@ -264,7 +345,7 @@ def _definitions(settings: Settings) -> Definitions:
 
 
 def _stores(settings: Settings) -> tuple[EntryStore, EntryStore]:
-    return EntryStore(settings.items), EntryStore(settings.resources)
+    return EntryStore(settings.items), EntryStore(settings.resource_store)
 
 
 def _plan(args: argparse.Namespace):

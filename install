@@ -1,0 +1,181 @@
+#!/bin/sh
+# Install textures from this checkout into a self-contained prefix.
+#
+# The installation uses a pinned uv, a uv-managed CPython, and the locked
+# dependencies in uv.lock. It does not use or change any Python, conda
+# environment, or uv configuration already on the host. Run ./install --help
+# for options.
+
+set -eu
+umask 022
+
+UV_VERSION=0.13.9
+
+usage() {
+    cat <<'EOF'
+Usage: ./install [options]
+
+Options:
+  --prefix DIR        install into DIR (default: CHECKOUT/textures-install)
+  --compute KIND      PyTorch build: cuda or cpu (default: cuda on Linux,
+                      cpu on macOS; later runs keep the recorded choice)
+  --resources DIR     shared directory of models and other resources
+                      (default: textures-resources in lab storage if
+                      writable, otherwise ~/textures-resources; later runs
+                      keep the recorded path)
+  --executor KIND     where computation runs: local or slurm (default: local)
+  --bin-dir DIR       where to put the textures command (default: ~/.local/bin)
+  --no-launcher       do not create the textures command in --bin-dir
+  --default           make this installation the one the textures command runs
+  --dev               also install the development tools (pytest, ruff)
+  -h, --help          show this help
+EOF
+}
+
+script=$0
+while [ -L "$script" ]; do
+    link=$(readlink "$script")
+    case $link in
+        /*) script=$link ;;
+        *) script=$(dirname "$script")/$link ;;
+    esac
+done
+checkout=$(CDPATH= cd "$(dirname "$script")" && pwd -P)
+
+prefix=$checkout/textures-install
+compute=
+resources=
+executor=
+bin_dir=$HOME/.local/bin
+launcher=true
+make_default=false
+dev=false
+while [ $# -gt 0 ]; do
+    case $1 in
+        --prefix) prefix=${2:?--prefix needs a directory}; shift ;;
+        --compute) compute=${2:?--compute needs cuda or cpu}; shift ;;
+        --resources) resources=${2:?--resources needs a directory}; shift ;;
+        --executor) executor=${2:?--executor needs local or slurm}; shift ;;
+        --bin-dir) bin_dir=${2:?--bin-dir needs a directory}; shift ;;
+        --no-launcher) launcher=false ;;
+        --default) make_default=true ;;
+        --dev) dev=true ;;
+        -h|--help) usage; exit 0 ;;
+        *) echo "install: unknown option: $1" >&2; usage >&2; exit 2 ;;
+    esac
+    shift
+done
+
+mkdir -p "$prefix"
+prefix=$(CDPATH= cd "$prefix" && pwd -P)
+
+# One installation process at a time per prefix.
+lock=$prefix/.install.lock
+host=$(uname -n)
+if ! mkdir "$lock" 2>/dev/null; then
+    owner_pid= owner_host=
+    if [ -r "$lock/owner" ]; then read -r owner_pid owner_host <"$lock/owner" || true; fi
+    if [ "$owner_host" = "$host" ] && ! kill -0 "${owner_pid:-0}" 2>/dev/null; then
+        rm -rf "$lock"
+        mkdir "$lock"
+    else
+        echo "install: another installation process holds $lock" >&2
+        exit 1
+    fi
+fi
+printf '%s %s\n' "$$" "$host" >"$lock/owner"
+download=
+cleanup() {
+    if [ -n "$download" ]; then rm -rf "$download"; fi
+    rm -rf "$lock"
+}
+trap cleanup EXIT
+trap 'cleanup; trap - EXIT; exit 1' HUP INT TERM
+
+# Keep a previously recorded PyTorch build unless one is given.
+if [ -z "$compute" ] && [ -r "$prefix/install.json" ]; then
+    compute=$(sed -n 's/^ *"compute": "\([a-z]*\)".*/\1/p' "$prefix/install.json")
+fi
+if [ -z "$compute" ]; then
+    case $(uname -s) in
+        Darwin) compute=cpu ;;
+        *) compute=cuda ;;
+    esac
+fi
+case $compute in
+    cuda|cpu) ;;
+    *) echo "install: --compute must be cuda or cpu" >&2; exit 2 ;;
+esac
+
+# The pinned uv for this host.
+case $(uname -s)-$(uname -m) in
+    Linux-x86_64|Linux-amd64)
+        target=x86_64-unknown-linux-gnu
+        sha=a7fbaff2b9a271d85c1bdb540941090fd1ce011797b4abeb48e4dcd39c2471d5 ;;
+    Linux-aarch64|Linux-arm64)
+        target=aarch64-unknown-linux-gnu
+        sha=0797542018e541a9288855df555c8077eed06f7a47d206362030480e8ecc9f3d ;;
+    Darwin-x86_64)
+        target=x86_64-apple-darwin
+        sha=617a3211261b0fc739562f0071aa34e9739797c510208ede8e2977c30903d041 ;;
+    Darwin-arm64)
+        target=aarch64-apple-darwin
+        sha=5aeca67f2283f75235de40d0bd9c0a5bbc5fce23b6d48b3bf9fa1b2db08382ca ;;
+    *)
+        echo "install: no pinned uv for $(uname -s) $(uname -m)" >&2
+        exit 1 ;;
+esac
+uv=$prefix/uv/$UV_VERSION/uv
+if [ ! -x "$uv" ]; then
+    echo "downloading uv $UV_VERSION"
+    download=$(mktemp -d "$prefix/.download.XXXXXX")
+    archive=$download/uv.tar.gz
+    url=https://github.com/astral-sh/uv/releases/download/$UV_VERSION/uv-$target.tar.gz
+    if command -v curl >/dev/null 2>&1; then
+        curl -fsSL "$url" -o "$archive"
+    elif command -v wget >/dev/null 2>&1; then
+        wget -q "$url" -O "$archive"
+    else
+        echo "install: curl or wget is required" >&2
+        exit 1
+    fi
+    if command -v sha256sum >/dev/null 2>&1; then
+        actual=$(sha256sum "$archive")
+    else
+        actual=$(shasum -a 256 "$archive")
+    fi
+    if [ "${actual%% *}" != "$sha" ]; then
+        echo "install: checksum mismatch for $url" >&2
+        exit 1
+    fi
+    tar -xzf "$archive" -C "$download"
+    mkdir -p "$prefix/uv/$UV_VERSION"
+    mv "$download/uv-$target/uv" "$uv"
+    rm -rf "$download"
+    download=
+fi
+
+# Ignore the caller's uv and Python configuration; use only the prefix.
+for name in $(env | sed -n 's/^\(UV_[A-Za-z0-9_]*\)=.*/\1/p'); do unset "$name"; done
+unset VIRTUAL_ENV CONDA_PREFIX PYTHONPATH PYTHONHOME PYTHONSTARTUP PYTHONUSERBASE || true
+export UV_NO_CONFIG=1
+export UV_PYTHON_PREFERENCE=only-managed
+export UV_PYTHON_INSTALL_DIR=$prefix/python
+export UV_CACHE_DIR=$prefix/uv-cache
+export UV_PROJECT_ENVIRONMENT=$prefix/env
+export PYTHONNOUSERSITE=1
+
+groups=--no-dev
+if [ "$dev" = true ]; then groups=--dev; fi
+echo "installing the environment ($compute) in $prefix/env"
+cd "$checkout"
+# Configuration discovery is off, so pass the pinned interpreter explicitly.
+python_version=$(cat "$checkout/.python-version")
+"$uv" sync --frozen --python "$python_version" --extra "$compute" $groups
+
+set -- --prefix "$prefix" --checkout "$checkout" --compute "$compute" --uv-version "$UV_VERSION"
+if [ -n "$resources" ]; then set -- "$@" --resources "$resources"; fi
+if [ -n "$executor" ]; then set -- "$@" --executor "$executor"; fi
+if [ "$launcher" = true ]; then set -- "$@" --bin-dir "$bin_dir"; fi
+if [ "$make_default" = true ]; then set -- "$@" --default; fi
+"$prefix/env/bin/python" -I -m textures.installation configure "$@"

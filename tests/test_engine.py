@@ -47,7 +47,7 @@ def definitions(settings) -> Definitions:
 def run(settings, name="doc", workflow="main", modules=None):
     plan = plan_request(settings, definitions(settings), name, workflow, modules)
     executor = Executor(
-        plan, EntryStore(settings.items), EntryStore(settings.resources), RunContext()
+        plan, EntryStore(settings.items), EntryStore(settings.resource_store), RunContext()
     )
     directory, written = run_request(plan, executor, modules)
     return plan, executor, directory, written
@@ -182,6 +182,15 @@ def test_upstream_sweep_labels_downstream_columns(env):
     ]
     assert CALLS["fake_scores"] == 6
     assert CALLS["build"] == 2
+
+
+def test_loaded_resources_are_released_after_their_last_variant(env):
+    add_input(env, DOCS)
+    write(env.definitions / "configs" / "fake_scores" / "two.yml", "scale: [1, 2]\n")
+    write(env.definitions / "workflows" / "two.yml", "fake_scores: two\n")
+    _, executor, _, _ = run(env, workflow="two", modules=["fake_feature"])
+    assert CALLS["load"] == 2
+    assert executor._loaded == {}
 
 
 def test_resolved_resource_changes_identity(env):

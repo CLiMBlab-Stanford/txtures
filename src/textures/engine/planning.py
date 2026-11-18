@@ -17,7 +17,7 @@ from typing import Any
 
 from textures.corpus import Corpus, Document
 from textures.definitions import Column, Definitions, Expansion, Variant
-from textures.errors import DefinitionError, InputError, Problem
+from textures.errors import DefinitionError, InputError, Problem, TexturesError
 from textures.identity import digest
 from textures.inputs import load_input
 from textures.modules import Module, Resource, RunContext
@@ -161,7 +161,11 @@ def plan_request(
             for name, resource in module.resources(variant.config).items():
                 key = digest({"kind": resource.kind, "spec": resource.spec})
                 if key not in resolved_resources:
-                    resolved = resource.resolve(context)
+                    try:
+                        resolved = resource.resolve(context)
+                    except TexturesError as error:
+                        problems.append(Problem(where, str(error)))
+                        continue
                     resolved_resources[key] = PlannedResource(
                         name, resource, resolved, resource_identity(resource, resolved)
                     )

@@ -2,9 +2,10 @@
 
 Settings never affect computed values, so they never enter a digest. Each
 setting resolves from the first source that provides it, in this order:
-command-line flag, environment variable, personal settings, the definitions
-store's site settings, built-in default. `definitions` cannot come from site
-settings, since it selects the store that holds them.
+command-line flag, environment variable, the installation record written by
+`./install`, personal settings, the definitions store's site settings,
+built-in default. `definitions` cannot come from site settings, since it
+selects the store that holds them.
 """
 
 from __future__ import annotations
@@ -24,26 +25,30 @@ LAB_ROOT = Path("/juice6/u/nlp/climblab")
 SITE_DOCUMENT = Path("site") / "site.yml"
 """Location of the site settings document inside a definitions store."""
 
-Kind = Literal["path", "text", "positive_int"]
+Kind = Literal["path", "text", "choice", "positive_int"]
 
 
 @dataclass(frozen=True)
 class SettingSpec:
-    """Declaration of one setting: its dotted key, value kind, and environment variable."""
+    """Declaration of one setting: its dotted key, value kind, and environment variable.
+
+    A `choice` setting accepts only the values in `choices`.
+    """
 
     key: str
     kind: Kind
     env: str | None = None
+    choices: tuple[str, ...] = ()
 
 
 SPECS: tuple[SettingSpec, ...] = (
     SettingSpec("definitions", "path", "TEXTURES_DEFINITIONS"),
     SettingSpec("inputs", "path", "TEXTURES_INPUTS"),
     SettingSpec("derivatives", "path", "TEXTURES_DERIVATIVES"),
-    SettingSpec("resources", "path", "TEXTURES_RESOURCES"),
     SettingSpec("items", "path", "TEXTURES_ITEMS"),
-    SettingSpec("hf_cache", "path", "TEXTURES_HF_CACHE"),
+    SettingSpec("resources", "path", "TEXTURES_RESOURCES"),
     SettingSpec("execution.device", "text"),
+    SettingSpec("execution.executor", "choice", choices=("local", "slurm")),
     SettingSpec("execution.max_variants", "positive_int"),
 )
 SPEC_BY_KEY = {spec.key: spec for spec in SPECS}
@@ -80,17 +85,32 @@ class Settings:
         return self["derivatives"]
 
     @property
-    def resources(self) -> Path:
-        return self["resources"]
-
-    @property
     def items(self) -> Path:
         return self["items"]
 
     @property
-    def hf_cache(self) -> Path | None:
-        """Hugging Face cache location, or `None` to use the Hugging Face default."""
-        return self["hf_cache"]
+    def resources(self) -> Path:
+        """The shared directory of text-independent resources, such as models."""
+        return self["resources"]
+
+    @property
+    def resource_store(self) -> Path:
+        """The content-addressed resource store, inside `resources`."""
+        return self.resources / "store"
+
+    @property
+    def hf_home(self) -> Path:
+        """The Hugging Face home directory, inside `resources`."""
+        return self.resources / "huggingface"
+
+    @property
+    def hf_cache(self) -> Path:
+        """The Hugging Face hub cache, where model files are downloaded."""
+        return self.hf_home / "hub"
+
+    @property
+    def executor(self) -> str:
+        return self["execution.executor"]
 
     @property
     def device(self) -> str:
@@ -118,10 +138,18 @@ def _writable(path: Path) -> bool:
 
 
 def default_values(home: Path, lab_root: Path) -> dict[str, Any]:
-    """Return built-in defaults, which depend on whether lab storage is accessible."""
+    """Return built-in defaults, which depend on whether lab storage is accessible.
+
+    `textures-definitions`, `textures-store`, and `textures-resources` are
+    siblings, in lab storage when it is accessible and otherwise in the home
+    directory. Inputs and derivatives are always personal.
+    """
     lab_readable = lab_root.is_dir() and os.access(lab_root, os.R_OK | os.X_OK)
-    shared = lab_root / "textures-store"
-    shared_writable = lab_readable and _writable(shared)
+
+    def shared(name: str) -> Path:
+        lab = lab_root / name
+        return lab if lab_readable and _writable(lab) else home / name
+
     personal = home / "textures-store"
     return {
         "definitions": lab_root / "textures-definitions"
@@ -129,10 +157,10 @@ def default_values(home: Path, lab_root: Path) -> dict[str, Any]:
         else home / "textures-definitions",
         "inputs": personal / "inputs",
         "derivatives": personal / "derivatives",
-        "resources": (shared if shared_writable else personal) / "resources",
-        "items": (shared if shared_writable else personal) / "items",
-        "hf_cache": None,
+        "items": shared("textures-store") / "items",
+        "resources": shared("textures-resources"),
         "execution.device": "auto",
+        "execution.executor": "local",
         "execution.max_variants": 64,
     }
 
@@ -159,6 +187,10 @@ def _coerce(spec: SettingSpec, value: Any, base: Path, location: str) -> Any:
     if spec.kind == "text":
         if not isinstance(value, str) or not value:
             raise SettingsError(f"{location}: {spec.key} must be non-empty text")
+        return value
+    if spec.kind == "choice":
+        if value not in spec.choices:
+            raise SettingsError(f"{location}: {spec.key} must be one of {', '.join(spec.choices)}")
         return value
     if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
         raise SettingsError(f"{location}: {spec.key} must be a positive integer")
@@ -192,6 +224,8 @@ def resolve_settings(
     home: Path | None = None,
     cwd: Path | None = None,
     lab_root: Path = LAB_ROOT,
+    installation: Mapping[str, Any] | None = None,
+    installation_source: str = "installation",
 ) -> Settings:
     """Resolve every setting from flags, environment, settings documents, and defaults.
 
@@ -199,6 +233,8 @@ def resolve_settings(
     are ignored. Relative paths from flags and environment variables resolve
     against `cwd`. Relative paths in a settings document resolve against that
     document's directory. A missing personal or site document is not an error.
+    `installation` holds the settings an installation record fixes, which
+    are absolute.
 
     Raises:
         SettingsError: A settings document or value is invalid.
@@ -210,6 +246,13 @@ def resolve_settings(
     for key in flags:
         if key not in SPEC_BY_KEY:
             raise SettingsError(f"unknown setting {key!r}")
+
+    installed: dict[str, Any] = {}
+    for key, value in (installation or {}).items():
+        spec = SPEC_BY_KEY.get(key)
+        if spec is None:
+            raise SettingsError(f"{installation_source}: unknown setting {key!r}")
+        installed[key] = _coerce(spec, value, Path("/"), installation_source)
 
     personal_path = personal_settings_path(env, home)
     personal = (
@@ -225,6 +268,8 @@ def resolve_settings(
         if spec.env and env.get(spec.env):
             value = _coerce(spec, env[spec.env], cwd, spec.env)
             return Setting(spec.key, value, f"environment ({spec.env})")
+        if spec.key in installed:
+            return Setting(spec.key, installed[spec.key], installation_source)
         if spec.key in personal:
             return Setting(spec.key, personal[spec.key], f"personal settings ({personal_path})")
         if spec.key in site:

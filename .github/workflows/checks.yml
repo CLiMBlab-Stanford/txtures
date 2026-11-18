@@ -22,7 +22,7 @@ jobs:
         with:
           enable-cache: true
       - name: Install textures and development dependencies
-        run: uv sync --frozen --group dev --python 3.12
+        run: uv sync --frozen --group dev --extra cpu
       - name: Check formatting
         run: uv run --frozen ruff format --check src tests .github/workflows
       - name: Check Python style

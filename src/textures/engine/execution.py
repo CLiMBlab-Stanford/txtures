@@ -131,10 +131,20 @@ class Executor:
         self._memo.clear()
 
     def compute_items(self) -> None:
-        """Compute every missing item of every persisted variant."""
-        for planned in self.plan.variants:
-            if planned.module.persist:
-                self._compute_variant(planned)
+        """Compute every missing item of every persisted variant.
+
+        A loaded resource, such as a model in GPU memory, is released once no
+        later variant needs it.
+        """
+        persisted = [planned for planned in self.plan.variants if planned.module.persist]
+        for index, planned in enumerate(persisted):
+            self._compute_variant(planned)
+            needed = {
+                r.identity for later in persisted[index + 1 :] for r in later.resources.values()
+            }
+            for identity in list(self._loaded):
+                if identity not in needed:
+                    del self._loaded[identity]
 
     def _compute_variant(self, planned: PlannedVariant) -> None:
         documents = self.plan.corpus.documents

@@ -7,14 +7,22 @@ documentation, how to change computed values, and how releases are made.
 
 ## Development setup
 
-textures uses [uv](https://docs.astral.sh/uv/) to manage its environment.
-From a checkout:
+`./install --dev` builds a self-contained installation with the development
+tools; see the README. To work with your own uv instead, from a checkout:
 
 ```bash
-uv sync --group dev
+uv sync --group dev --extra cpu   # or --extra cuda
 uv run pytest -q
 uv run ruff format --check src tests
 uv run ruff check src tests
+```
+
+Tests marked `integration` download tokenizers and small models from the
+Hugging Face hub and are skipped by default. Run them before changing
+tokenization, scoring, or surprisal code:
+
+```bash
+uv run pytest -q -m integration
 ```
 
 ## AI-assisted contributions

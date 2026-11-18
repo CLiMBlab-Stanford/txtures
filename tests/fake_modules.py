@@ -49,6 +49,7 @@ class Weights(Resource):
         (directory / "weights.json").write_text(json.dumps({"scale": resolved["scale"]}))
 
     def load(self, resolved, directory: Path, context: RunContext):
+        count("load", 1)
         return json.loads((directory / "weights.json").read_text())["scale"]
 
 

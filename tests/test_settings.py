@@ -27,19 +27,21 @@ def test_defaults_without_lab_storage_are_personal(home, no_lab):
     settings = resolve(home, no_lab)
     assert settings.definitions == home / "textures-definitions"
     assert settings.inputs == home / "textures-store" / "inputs"
-    assert settings.resources == home / "textures-store" / "resources"
     assert settings.items == home / "textures-store" / "items"
-    assert settings.hf_cache is None
+    assert settings.resources == home / "textures-resources"
+    assert settings.resource_store == home / "textures-resources" / "store"
+    assert settings.hf_cache == home / "textures-resources" / "huggingface" / "hub"
+    assert settings.executor == "local"
     assert settings.max_variants == 64
     assert all(setting.source == "default" for setting in settings.values.values())
 
 
-def test_defaults_with_writable_lab_storage_share_resources(home, tmp_path):
+def test_defaults_with_writable_lab_storage_share_resources_and_items(home, tmp_path):
     lab = tmp_path / "lab"
     lab.mkdir()
     settings = resolve(home, lab)
     assert settings.definitions == lab / "textures-definitions"
-    assert settings.resources == lab / "textures-store" / "resources"
+    assert settings.resources == lab / "textures-resources"
     assert settings.items == lab / "textures-store" / "items"
     assert settings.inputs == home / "textures-store" / "inputs"
 
@@ -114,3 +116,23 @@ def test_invalid_settings_documents_are_rejected(home, no_lab, text, message):
     write(home / ".config" / "textures" / "settings.yml", text)
     with pytest.raises(SettingsError, match=message):
         resolve(home, no_lab)
+
+
+def test_installation_overrides_personal_and_site_but_not_env(home, no_lab, tmp_path):
+    write(home / ".config" / "textures" / "settings.yml", "resources: /personal/res\n")
+    installed = {"resources": "/installed/res", "execution.executor": "slurm"}
+    settings = resolve_settings(
+        env={}, home=home, lab_root=no_lab, installation=installed, installation_source="inst"
+    )
+    assert settings.resources == Path("/installed/res")
+    assert settings.values["resources"].source == "inst"
+    assert settings.executor == "slurm"
+    settings = resolve_settings(
+        env={"TEXTURES_RESOURCES": "/env/res"}, home=home, lab_root=no_lab, installation=installed
+    )
+    assert settings.resources == Path("/env/res")
+
+
+def test_executor_must_be_a_known_choice(home, no_lab):
+    with pytest.raises(SettingsError, match="must be one of local, slurm"):
+        resolve(home, no_lab, flags={"execution.executor": "pbs"})
