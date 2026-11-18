@@ -25,7 +25,7 @@ LAB_ROOT = Path("/juice6/u/nlp/climblab")
 SITE_DOCUMENT = Path("site") / "site.yml"
 """Location of the site settings document inside a definitions store."""
 
-Kind = Literal["path", "text", "choice", "positive_int"]
+Kind = Literal["path", "text", "choice", "positive_int", "count", "text_list"]
 
 
 @dataclass(frozen=True)
@@ -50,6 +50,14 @@ SPECS: tuple[SettingSpec, ...] = (
     SettingSpec("execution.device", "text"),
     SettingSpec("execution.executor", "choice", choices=("local", "slurm")),
     SettingSpec("execution.max_variants", "positive_int"),
+    SettingSpec("slurm.partition", "text"),
+    SettingSpec("slurm.account", "text"),
+    SettingSpec("slurm.time_hours", "positive_int"),
+    SettingSpec("slurm.memory_gb", "positive_int"),
+    SettingSpec("slurm.cpus", "positive_int"),
+    SettingSpec("slurm.gpus", "count"),
+    SettingSpec("slurm.workers", "positive_int"),
+    SettingSpec("slurm.options", "text_list"),
 )
 SPEC_BY_KEY = {spec.key: spec for spec in SPECS}
 
@@ -112,6 +120,14 @@ class Settings:
     def executor(self) -> str:
         return self["execution.executor"]
 
+    def group(self, prefix: str) -> dict[str, Any]:
+        """Settings under `prefix.`, keyed without the prefix."""
+        return {
+            key.removeprefix(f"{prefix}."): setting.value
+            for key, setting in self.values.items()
+            if key.startswith(f"{prefix}.")
+        }
+
     @property
     def device(self) -> str:
         return self["execution.device"]
@@ -162,6 +178,14 @@ def default_values(home: Path, lab_root: Path) -> dict[str, Any]:
         "execution.device": "auto",
         "execution.executor": "local",
         "execution.max_variants": 64,
+        "slurm.partition": None,
+        "slurm.account": None,
+        "slurm.time_hours": 24,
+        "slurm.memory_gb": 32,
+        "slurm.cpus": 4,
+        "slurm.gpus": 1,
+        "slurm.workers": 1,
+        "slurm.options": [],
     }
 
 
@@ -191,6 +215,16 @@ def _coerce(spec: SettingSpec, value: Any, base: Path, location: str) -> Any:
     if spec.kind == "choice":
         if value not in spec.choices:
             raise SettingsError(f"{location}: {spec.key} must be one of {', '.join(spec.choices)}")
+        return value
+    if spec.kind == "text_list":
+        if not isinstance(value, list) or not all(isinstance(v, str) and v for v in value):
+            raise SettingsError(f"{location}: {spec.key} must be a list of non-empty text")
+        return list(value)
+    if isinstance(value, str) and value.isdigit():
+        value = int(value)  # from a flag or environment variable
+    if spec.kind == "count":
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            raise SettingsError(f"{location}: {spec.key} must be a non-negative integer")
         return value
     if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
         raise SettingsError(f"{location}: {spec.key} must be a positive integer")

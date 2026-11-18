@@ -1,6 +1,7 @@
 # Python environments, bytecode, and package builds
 /.venv/
 /textures-install/
+/.pytest-slurm/
 __pycache__/
 *.py[cod]
 *.egg-info/

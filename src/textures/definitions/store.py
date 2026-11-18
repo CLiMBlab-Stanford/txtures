@@ -139,6 +139,15 @@ SITE_TEMPLATE = """\
 #   device: auto
 #   executor: local
 #   max_variants: 64
+# slurm:
+#   partition: gpu
+#   account: mylab
+#   time_hours: 24
+#   memory_gb: 32
+#   cpus: 4
+#   gpus: 1
+#   workers: 1
+#   options: ["--exclude=node1"]
 """
 
 EXAMPLE_CONFIG = """\

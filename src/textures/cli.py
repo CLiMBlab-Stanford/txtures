@@ -22,6 +22,7 @@ from textures.engine import (
     table_is_current,
     table_statuses,
 )
+from textures.engine import slurm as slurm_jobs
 from textures.errors import Problem, SettingsError, TexturesError
 from textures.inputs import InputReport, load_input, read_input, scan_inputs
 from textures.modules import RunContext
@@ -100,6 +101,18 @@ def build_parser() -> argparse.ArgumentParser:
         )
         if command == "plan":
             sub.add_argument("--json", action="store_true", help="print JSON")
+        else:
+            sub.add_argument(
+                "--local",
+                action="store_true",
+                help="compute here even when the installation submits to Slurm",
+            )
+            sub.add_argument(
+                "--workers",
+                type=int,
+                metavar="N",
+                help="Slurm array tasks that share the work (default: slurm.workers)",
+            )
         sub.set_defaults(handler=handler)
 
     status = commands.add_parser("status", help="report which output tables are current")
@@ -107,7 +120,12 @@ def build_parser() -> argparse.ArgumentParser:
     status.add_argument("--json", action="store_true", help="print JSON")
     status.set_defaults(handler=status_command)
 
-    gc = commands.add_parser("gc", help="remove stale and broken output tables")
+    worker = commands.add_parser("worker", help=argparse.SUPPRESS)
+    worker.add_argument("directory", type=Path)
+    worker.add_argument("task", type=int)
+    worker.set_defaults(handler=worker_command)
+
+    gc = commands.add_parser("gc", help="remove stale and broken output tables and finished jobs")
     gc.add_argument("--dry-run", action="store_true", help="list what would be removed")
     gc.set_defaults(handler=gc_command)
 
@@ -136,12 +154,20 @@ def _settings(args: argparse.Namespace, **overrides: object) -> Settings:
     return settings
 
 
+def _show(value: object) -> str:
+    if value is None:
+        return "(unset)"
+    if isinstance(value, list):
+        return " ".join(value) if value else "(none)"
+    return str(value)
+
+
 def site_show(args: argparse.Namespace) -> int:
     """Print the installation and every resolved setting with its source."""
     settings = _settings(args)
     installed = installation.current()
     rows = [
-        (setting.key, str(setting.value), setting.source) for setting in settings.values.values()
+        (setting.key, _show(setting.value), setting.source) for setting in settings.values.values()
     ]
     if args.json:
         payload = {
@@ -149,7 +175,14 @@ def site_show(args: argparse.Namespace) -> int:
             if installed is None
             else {"prefix": str(installed.prefix), "compute": installed.compute},
             "settings": [
-                {"key": key, "value": value, "source": source} for key, value, source in rows
+                {
+                    "key": setting.key,
+                    "value": str(setting.value)
+                    if isinstance(setting.value, Path)
+                    else setting.value,
+                    "source": setting.source,
+                }
+                for setting in settings.values.values()
             ],
         }
         print(json.dumps(payload, indent=2))
@@ -427,20 +460,88 @@ def plan_command(args: argparse.Namespace) -> int:
     return 0
 
 
+def _slurm() -> slurm_jobs.Slurm:
+    return slurm_jobs.Slurm()
+
+
+def _progress(message: str) -> None:
+    print(message, file=sys.stderr, flush=True)
+
+
 def run_command(args: argparse.Namespace) -> int:
-    """Compute a request and write its output table."""
+    """Compute a request and write its output table, here or as a Slurm job."""
     settings, plan = _plan(args)
-    items, resources = _stores(settings)
     for note in plan.notes:
         print(f"note: {note}", file=sys.stderr)
-
-    def progress(message: str) -> None:
-        print(message, file=sys.stderr, flush=True)
-
+    if settings.executor == "slurm" and not args.local:
+        return _submit(args, settings, plan)
+    if args.workers is not None:
+        raise TexturesError("--workers applies only to Slurm execution")
+    items, resources = _stores(settings)
     executor = Executor(
-        plan, items, resources, RunContext(settings.device, settings.hf_cache), progress
+        plan, items, resources, RunContext(settings.device, settings.hf_cache), _progress
     )
-    directory, written = run_request(plan, executor, args.modules)
+    return _report_run(plan, executor, *run_request(plan, executor, args.modules))
+
+
+def _submit(args: argparse.Namespace, settings: Settings, plan) -> int:
+    if table_is_current(plan):
+        print(f"{plan.table_directory} is already current")
+        return 0
+    workers = args.workers if args.workers is not None else settings["slurm.workers"]
+    if workers < 1:
+        raise TexturesError("--workers must be at least 1")
+    slurm = _slurm()
+    existing = slurm_jobs.read_job(slurm_jobs.job_directory(settings.derivatives, plan))
+    if existing is not None:
+        states = slurm.states(existing.job_id)
+        if slurm_jobs.is_active(states):
+            print(
+                f"job {existing.job_id} is already computing this table "
+                f"({slurm_jobs.summarize(states)})"
+            )
+            return 0
+    job = slurm_jobs.submit(plan, settings, args.modules, workers, slurm)
+    noun = "task" if workers == 1 else "tasks"
+    print(f"submitted job {job.job_id} ({workers} {noun}) to write {plan.table_directory}")
+    print(f"logs: {job.directory / 'logs'}; check progress with `textures status`")
+    return 0
+
+
+def worker_command(args: argparse.Namespace) -> int:
+    """Run one task of a submitted job: compute its shard, then write the table."""
+    job = slurm_jobs.read_job(args.directory)
+    if job is None:
+        raise TexturesError(f"{args.directory} does not hold a submitted job")
+    request = job.request
+    flags = {key: value for key, value in request["settings"].items()}
+    flags["execution.executor"] = "local"
+    settings = resolve_settings(flags)
+    environment.apply(settings)
+    plan = plan_request(
+        settings, _definitions(settings), request["input"], request["workflow"], request["modules"]
+    )
+    if plan.table_identity != job.table_identity:
+        raise TexturesError(
+            "the input, definitions, or resolved resources changed after this job was "
+            "submitted; run `textures run` again"
+        )
+    if not 0 <= args.task < job.workers:
+        raise TexturesError(f"task {args.task} is outside the job's {job.workers} tasks")
+    items, resources = _stores(settings)
+    executor = Executor(
+        plan,
+        items,
+        resources,
+        RunContext(settings.device, settings.hf_cache),
+        _progress,
+        shard=(args.task, job.workers),
+    )
+    _progress(f"task {args.task} of {job.workers} for {plan.table_directory}")
+    return _report_run(plan, executor, *run_request(plan, executor, request["modules"]))
+
+
+def _report_run(plan, executor: Executor, directory: Path, written: bool) -> int:
     if not written:
         print(f"{directory} is already current")
         return 0
@@ -458,14 +559,45 @@ def _table_statuses(args: argparse.Namespace, names) -> list[TableStatus]:
     return table_statuses(settings.derivatives, replanner(settings, definitions), names)
 
 
+def _job_rows(settings: Settings, names) -> list[tuple[slurm_jobs.Job, dict[str, str], str]]:
+    """Each recorded job with its task states and a one-line description."""
+    found = slurm_jobs.jobs(settings.derivatives, names)
+    if not found:
+        return []
+    slurm = _slurm()
+    rows = []
+    for job in found:
+        try:
+            states = slurm.states(job.job_id)
+            description = slurm_jobs.summarize(states)
+        except TexturesError as error:
+            states, description = {}, f"state unavailable: {error}"
+        rows.append((job, states, description))
+    return rows
+
+
 def status_command(args: argparse.Namespace) -> int:
-    """Report whether each output table matches its request under current definitions."""
+    """Report which output tables are current and the state of submitted jobs."""
     statuses = _table_statuses(args, args.names or None)
+    jobs = _job_rows(_settings(args), args.names or None)
     if args.json:
-        payload = [
-            {"path": str(status.path), "state": status.state, "reason": status.reason}
-            for status in statuses
-        ]
+        payload = {
+            "tables": [
+                {"path": str(status.path), "state": status.state, "reason": status.reason}
+                for status in statuses
+            ],
+            "jobs": [
+                {
+                    "job_id": job.job_id,
+                    "input": job.request["input"],
+                    "workflow": job.request["workflow"],
+                    "table": job.directory.name,
+                    "tasks": states,
+                    "logs": str(job.directory / "logs"),
+                }
+                for job, states, _ in jobs
+            ],
+        }
         print(json.dumps(payload, indent=2))
         return 0
     if not statuses:
@@ -473,11 +605,14 @@ def status_command(args: argparse.Namespace) -> int:
     for status in statuses:
         reason = f"  ({status.reason})" if status.reason else ""
         print(f"{status.state:<8} {status.path}{reason}")
+    for job, _, description in jobs:
+        where = f"{job.request['input']}/{job.directory.name}"
+        print(f"job {job.job_id}  {where}: {description}  (logs: {job.directory / 'logs'})")
     return 0
 
 
 def gc_command(args: argparse.Namespace) -> int:
-    """Remove stale and broken output tables."""
+    """Remove stale and broken output tables and the records of finished jobs."""
     removable = [s for s in _table_statuses(args, None) if s.state != "current"]
     for status in removable:
         if args.dry_run:
@@ -485,7 +620,18 @@ def gc_command(args: argparse.Namespace) -> int:
         else:
             shutil.rmtree(status.path)
             print(f"removed {status.path} ({status.state})")
-    if not removable:
+    finished = [
+        job
+        for job, states, _ in _job_rows(_settings(args), None)
+        if states and not slurm_jobs.is_active(states)
+    ]
+    for job in finished:
+        if args.dry_run:
+            print(f"would remove the record and logs of finished job {job.job_id}")
+        else:
+            shutil.rmtree(job.directory)
+            print(f"removed the record and logs of finished job {job.job_id}")
+    if not removable and not finished:
         print("nothing to remove")
     return 0
 

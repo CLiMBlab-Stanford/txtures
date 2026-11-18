@@ -5,6 +5,11 @@ persisted variant in dependency order, in batches of the module's
 `batch_size`. Each item is locked while it is computed, so concurrent runs
 that need the same item compute it once. Results of modules that are not
 persisted are computed when they are first needed.
+
+Several workers can share one plan: worker `k` of `n` first computes the
+items whose position among the variant's distinct documents is `k` modulo
+`n`, then waits for or computes the rest, so a worker that fails does not
+leave items missing.
 """
 
 from __future__ import annotations
@@ -40,7 +45,12 @@ class Executor:
         resources: EntryStore,
         context: RunContext,
         progress: Progress | None = None,
+        shard: tuple[int, int] = (0, 1),
     ):
+        index, count = shard
+        if not 0 <= index < count:
+            raise ValueError(f"shard {index} of {count} is out of range")
+        self.shard = shard
         self.plan = plan
         self.items = items
         self.resource_store = resources
@@ -147,45 +157,68 @@ class Executor:
                     del self._loaded[identity]
 
     def _compute_variant(self, planned: PlannedVariant) -> None:
-        documents = self.plan.corpus.documents
         kind = item_kind(planned.name)
         counts = self.counts[planned.identity]
         unique: dict[str, Document] = {}
-        for document in documents:
+        for document in self.plan.corpus.documents:
             unique.setdefault(planned.item_identity(document), document)
-        missing = [d for i, d in unique.items() if self.items.get(kind, i) is None]
+        missing = {i: d for i, d in unique.items() if self.items.get(kind, i) is None}
         counts.reused += len(unique) - len(missing)
         if not missing:
             return
         self.progress(f"{_describe(planned)}: computing {len(missing)} of {len(unique)} items")
-        locks = _HeldLocks(self.items, kind)
-        waiting = [d for d in missing if not locks.acquire(planned.item_identity(d))]
-        try:
-            todo = []
-            for document in missing:
-                identity = planned.item_identity(document)
-                if not locks.holds(identity):
-                    continue
-                if self.items.get(kind, identity) is None:
-                    todo.append(document)
-                else:
-                    counts.reused += 1
-                    locks.release(identity)
-            size = planned.module.batch_size
-            for start in range(0, len(todo), size):
-                batch = todo[start : start + size]
-                self._compute_and_publish(planned, batch)
-                for document in batch:
-                    locks.release(planned.item_identity(document))
-        finally:
-            locks.release_all()
-        for document in waiting:
+        index, count = self.shard
+        own = {i for position, i in enumerate(unique) if position % count == index}
+        ordered = [i for i in missing if i in own] + [i for i in missing if i not in own]
+        held_elsewhere = self._compute_unlocked(planned, [missing[i] for i in ordered])
+        for document in held_elsewhere:
             identity = planned.item_identity(document)
             with self.items.lock(kind, identity):
                 if self.items.get(kind, identity) is None:
                     self._compute_and_publish(planned, [document])
                 else:
                     counts.reused += 1
+
+    def _compute_unlocked(
+        self, planned: PlannedVariant, documents: Sequence[Document]
+    ) -> list[Document]:
+        """Compute missing items that no one else holds, in batches.
+
+        Locks are taken one batch at a time, so another worker can take over
+        items this one has not reached. Returns the documents whose items
+        another process was computing.
+        """
+        kind = item_kind(planned.name)
+        counts = self.counts[planned.identity]
+        locks = _HeldLocks(self.items, kind)
+        held_elsewhere: list[Document] = []
+        batch: list[Document] = []
+
+        def flush() -> None:
+            self._compute_and_publish(planned, batch)
+            for document in batch:
+                locks.release(planned.item_identity(document))
+            batch.clear()
+
+        try:
+            for document in documents:
+                identity = planned.item_identity(document)
+                if self.items.get(kind, identity) is not None:
+                    counts.reused += 1
+                elif not locks.acquire(identity):
+                    held_elsewhere.append(document)
+                elif self.items.get(kind, identity) is not None:
+                    counts.reused += 1
+                    locks.release(identity)
+                else:
+                    batch.append(document)
+                    if len(batch) == planned.module.batch_size:
+                        flush()
+            if batch:
+                flush()
+        finally:
+            locks.release_all()
+        return held_elsewhere
 
     def result(self, planned: PlannedVariant, document: Document) -> Any:
         """Return a variant's result for one document, loading or computing it."""

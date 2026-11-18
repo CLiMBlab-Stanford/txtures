@@ -77,3 +77,19 @@ def test_validate_checks_unused_configs_and_every_workflow(store):
     assert "unused.yml: dtype:" in found
     assert "main cannot use extends" in found
     assert "w.yml: no lm_scores config named 'nothere'" in found
+
+
+def test_heartbeat_keeps_held_locks_fresh(tmp_path):
+    from textures.store import Heartbeat
+
+    path = tmp_path / "entry.lock"
+    path.write_text("{}")
+    os.utime(path, (0, 0))
+    heartbeat = Heartbeat(interval=3600)
+    heartbeat.add(path)
+    heartbeat.beat()
+    assert path.stat().st_mtime > 1e9
+    heartbeat.discard(path)
+    os.utime(path, (0, 0))
+    heartbeat.beat()
+    assert path.stat().st_mtime == 0

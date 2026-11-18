@@ -7,8 +7,11 @@ beside their final location and published with a rename, and the manifest is
 written last, so readers never see a partial entry.
 
 Producers of the same entry coordinate through a lock file created with
-`O_CREAT | O_EXCL`. A lock is broken when its process is known to be gone or
-when it is older than the stale limit.
+`O_CREAT | O_EXCL`. While a process holds locks, a background heartbeat
+refreshes their modification times every minute. A lock is broken when its
+process is known to be gone (on the same host) or when it has not been
+refreshed within the stale limit, so a holder that dies on another host
+delays others by minutes, not hours.
 """
 
 from __future__ import annotations
@@ -19,6 +22,7 @@ import shutil
 import socket
 import stat
 import tempfile
+import threading
 import time
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
@@ -32,7 +36,8 @@ from textures.errors import TexturesError
 
 MANIFEST = "manifest.json"
 LOCK_SUFFIX = ".lock"
-STALE_LOCK_SECONDS = 6 * 60 * 60
+STALE_LOCK_SECONDS = 15 * 60
+HEARTBEAT_SECONDS = 60
 POLL_SECONDS = 0.2
 
 
@@ -102,6 +107,47 @@ class LockOwner:
         return cls(socket.gethostname(), os.getpid(), time.time())
 
 
+class Heartbeat:
+    """Refreshes the modification time of held lock files from a daemon thread."""
+
+    def __init__(self, interval: float = HEARTBEAT_SECONDS):
+        self.interval = interval
+        self._paths: set[Path] = set()
+        self._guard = threading.Lock()
+        self._thread: threading.Thread | None = None
+
+    def add(self, path: Path) -> None:
+        with self._guard:
+            self._paths.add(path)
+            if self._thread is None:
+                self._thread = threading.Thread(
+                    target=self._run, name="textures-lock-heartbeat", daemon=True
+                )
+                self._thread.start()
+
+    def discard(self, path: Path) -> None:
+        with self._guard:
+            self._paths.discard(path)
+
+    def beat(self) -> None:
+        with self._guard:
+            paths = list(self._paths)
+        for path in paths:
+            try:
+                os.utime(path)
+            except OSError:
+                pass
+
+    def _run(self) -> None:
+        while True:
+            time.sleep(self.interval)
+            self.beat()
+
+
+HEARTBEAT = Heartbeat()
+"""The process-wide heartbeat for every lock this process holds."""
+
+
 def _read_owner(path: Path) -> LockOwner | None:
     try:
         data = read_json(path)
@@ -148,6 +194,7 @@ def try_lock(path: Path, stale_seconds: float = STALE_LOCK_SECONDS) -> bool:
         with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
             json.dump({"host": owner.host, "pid": owner.pid, "started": owner.started}, handle)
         _share(path)
+        HEARTBEAT.add(path)
         return True
     return False
 
@@ -164,6 +211,7 @@ def lock(path: Path, stale_seconds: float = STALE_LOCK_SECONDS) -> Iterator[None
 
 
 def unlock(path: Path) -> None:
+    HEARTBEAT.discard(path)
     try:
         path.unlink()
     except FileNotFoundError:

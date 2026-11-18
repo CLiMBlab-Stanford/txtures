@@ -20,6 +20,8 @@ import numpy as np
 from textures.modules import Item, Module, ModuleConfig, Registry, Resource, RunContext
 
 CALLS: Counter[str] = Counter()
+ORDER: list[str] = []
+"""Texts of the documents `fake_scores` computed, in order."""
 _CALLS_LOCK = threading.Lock()
 STATE = {"resolved_revision": "rev1", "delay": 0.0, "fail_on": None}
 
@@ -31,6 +33,7 @@ def count(name: str, n: int) -> None:
 
 def reset() -> None:
     CALLS.clear()
+    ORDER.clear()
     STATE.update(resolved_revision="rev1", delay=0.0, fail_on=None)
 
 
@@ -87,6 +90,8 @@ class FakeScores(Module):
             scale = item.resources["weights"]
             lengths = [end - start for start, end in item.document.regions]
             results.append({"values": np.array(lengths, dtype=np.float64) * scale})
+        with _CALLS_LOCK:
+            ORDER.extend(item.document.text for item in items)
         count("fake_scores", len(items))
         return results
 

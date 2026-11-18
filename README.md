@@ -25,6 +25,11 @@ changing any Python already on the machine. It puts a `textures` command in
   other resources. Point it at an existing directory to share it.
 - `--prefix DIR` installs somewhere other than the checkout.
 
+On a Slurm cluster, `./install --executor slurm` makes `textures run` submit
+its computation as a job and return at once; set `slurm.partition` (and
+optionally `account`, `gpus`, `memory_gb`, `time_hours`, `workers`) in your
+settings, and follow the job with `textures status`.
+
 Run `./install --help` for every option and `textures site show` to see the
 resulting settings. For gated models, run `textures hf login` once.
 

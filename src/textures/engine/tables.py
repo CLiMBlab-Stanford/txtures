@@ -31,7 +31,7 @@ from textures.definitions import Definitions
 from textures.engine.execution import Executor
 from textures.engine.planning import Plan, PlannedVariant, plan_request
 from textures.errors import TexturesError
-from textures.store import MANIFEST, now, read_json, write_json
+from textures.store import MANIFEST, lock, make_shared_dir, now, read_json, write_json
 
 COLUMNS_SUFFIX = ".columns.tsv"
 
@@ -238,7 +238,7 @@ def table_statuses(
     statuses = []
     inputs = [derivatives / name for name in names] if names else sorted(derivatives.iterdir())
     for input_directory in inputs:
-        if not input_directory.is_dir():
+        if not input_directory.is_dir() or input_directory.name.startswith("."):
             continue
         for directory in sorted(input_directory.iterdir()):
             if not directory.is_dir():
@@ -274,7 +274,13 @@ def run_request(plan: Plan, executor: Executor, modules: Sequence[str] | None) -
         return plan.table_directory, False
     executor.prepare_resources()
     executor.compute_items()
-    return write_table(plan, executor, modules), True
+    directory = plan.table_directory
+    make_shared_dir(directory.parent)
+    # Concurrent runs of one request (or the workers of one job) write it once.
+    with lock(directory.with_name(directory.name + ".lock")):
+        if table_is_current(plan):
+            return directory, False
+        return write_table(plan, executor, modules), True
 
 
 def replanner(settings, definitions: Definitions):
