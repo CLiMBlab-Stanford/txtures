@@ -4,15 +4,28 @@ from __future__ import annotations
 
 import argparse
 import json
+import shutil
 import sys
 from collections.abc import Sequence
 from pathlib import Path
 
 from textures import __version__
 from textures.definitions import Definitions, init_store
+from textures.engine import (
+    Executor,
+    TableStatus,
+    item_status,
+    plan_request,
+    replanner,
+    run_request,
+    table_is_current,
+    table_statuses,
+)
 from textures.errors import Problem, SettingsError, TexturesError
 from textures.inputs import InputReport, load_input, read_input, scan_inputs
+from textures.modules import RunContext
 from textures.settings import Settings, resolve_settings
+from textures.store import EntryStore
 
 PATH_FLAGS = {
     "definitions": "definitions store",
@@ -69,6 +82,34 @@ def build_parser() -> argparse.ArgumentParser:
     check.add_argument("name", help="input basename")
     check.add_argument("--json", action="store_true", help="print JSON")
     check.set_defaults(handler=inputs_check)
+
+    for command, help_text, handler in (
+        ("plan", "show what a request needs and what is missing", plan_command),
+        ("run", "compute a request and write its output table", run_command),
+    ):
+        sub = commands.add_parser(command, help=help_text)
+        sub.add_argument("name", help="input basename")
+        sub.add_argument("-w", "--workflow", default="main", help="workflow ID (default: main)")
+        sub.add_argument(
+            "-m",
+            "--module",
+            dest="modules",
+            action="append",
+            metavar="MODULE",
+            help="feature module to include; repeat for several (default: all in the workflow)",
+        )
+        if command == "plan":
+            sub.add_argument("--json", action="store_true", help="print JSON")
+        sub.set_defaults(handler=handler)
+
+    status = commands.add_parser("status", help="report which output tables are current")
+    status.add_argument("names", nargs="*", metavar="NAME", help="input basenames (default: all)")
+    status.add_argument("--json", action="store_true", help="print JSON")
+    status.set_defaults(handler=status_command)
+
+    gc = commands.add_parser("gc", help="remove stale and broken output tables")
+    gc.add_argument("--dry-run", action="store_true", help="list what would be removed")
+    gc.set_defaults(handler=gc_command)
     return parser
 
 
@@ -212,6 +253,159 @@ def inputs_check(args: argparse.Namespace) -> int:
     if corpus.metadata_columns:
         print(f"  metadata columns: {', '.join(corpus.metadata_columns)}")
     print(f"  digest: {corpus.digest}")
+    return 0
+
+
+def _definitions(settings: Settings) -> Definitions:
+    """Load the selected definitions store, or the packaged definitions if it does not exist."""
+    if settings.definitions.is_dir():
+        return Definitions.load(settings.definitions)
+    return Definitions.packaged()
+
+
+def _stores(settings: Settings) -> tuple[EntryStore, EntryStore]:
+    return EntryStore(settings.items), EntryStore(settings.resources)
+
+
+def _plan(args: argparse.Namespace):
+    settings = _settings(args)
+    definitions = _definitions(settings)
+    plan = plan_request(settings, definitions, args.name, args.workflow, args.modules)
+    return settings, plan
+
+
+def _variant_label(planned) -> str:
+    labels = ", ".join(label.value for label in planned.variant.labels)
+    return f"{planned.name} [{labels or planned.variant.config_id}]"
+
+
+def plan_command(args: argparse.Namespace) -> int:
+    """Print what a request needs: its table, resources, items, and columns."""
+    settings, plan = _plan(args)
+    items, resources = _stores(settings)
+    statuses = {status.variant.identity: status for status in item_status(plan, items)}
+    corpus = plan.corpus
+    resource_rows = [
+        {
+            "kind": r.kind,
+            "identity": r.identity,
+            "present": resources.get(r.kind, r.identity) is not None,
+        }
+        for r in plan.resources()
+    ]
+    variant_rows = []
+    for planned in plan.variants:
+        status = statuses.get(planned.identity)
+        variant_rows.append(
+            {
+                "variant": _variant_label(planned),
+                "identity": planned.identity,
+                "persisted": planned.module.persist,
+                "present": status.present if status else None,
+                "missing": status.missing if status else None,
+            }
+        )
+    if args.json:
+        payload = {
+            "input": {"name": corpus.name, "digest": corpus.digest, "layout": corpus.layout},
+            "documents": len(corpus.documents),
+            "regions": corpus.region_count,
+            "workflow": plan.workflow,
+            "table": str(plan.table_directory),
+            "table_current": table_is_current(plan),
+            "resources": resource_rows,
+            "variants": variant_rows,
+            "columns": [column.name for column in plan.columns],
+            "notes": list(plan.notes),
+        }
+        print(json.dumps(payload, indent=2))
+        return 0
+    print(
+        f"input {corpus.name}: {corpus.layout}, {len(corpus.documents)} documents, "
+        f"{corpus.region_count} regions"
+    )
+    print(f"workflow {plan.workflow}")
+    state = "current" if table_is_current(plan) else "to be written"
+    print(f"table {plan.table_directory} ({state})")
+    if resource_rows:
+        print("resources:")
+        for row in resource_rows:
+            print(
+                f"  {row['kind']} {row['identity'][:12]}: {'present' if row['present'] else 'missing'}"
+            )
+    print("variants:")
+    for row in variant_rows:
+        if row["persisted"]:
+            detail = f"{row['present']} stored, {row['missing']} missing"
+        else:
+            detail = "computed when the table is written"
+        print(f"  {row['variant']}: {detail}")
+    print(f"columns: {', '.join(column.name for column in plan.columns)}")
+    for note in plan.notes:
+        print(f"note: {note}")
+    return 0
+
+
+def run_command(args: argparse.Namespace) -> int:
+    """Compute a request and write its output table."""
+    settings, plan = _plan(args)
+    items, resources = _stores(settings)
+    for note in plan.notes:
+        print(f"note: {note}", file=sys.stderr)
+
+    def progress(message: str) -> None:
+        print(message, file=sys.stderr, flush=True)
+
+    executor = Executor(
+        plan, items, resources, RunContext(settings.device, settings.hf_cache), progress
+    )
+    directory, written = run_request(plan, executor, args.modules)
+    if not written:
+        print(f"{directory} is already current")
+        return 0
+    for planned in plan.variants:
+        if planned.module.persist:
+            counts = executor.counts[planned.identity]
+            print(f"{_variant_label(planned)}: {counts.computed} computed, {counts.reused} reused")
+    print(f"wrote {directory}")
+    return 0
+
+
+def _table_statuses(args: argparse.Namespace, names) -> list[TableStatus]:
+    settings = _settings(args)
+    definitions = _definitions(settings)
+    return table_statuses(settings.derivatives, replanner(settings, definitions), names)
+
+
+def status_command(args: argparse.Namespace) -> int:
+    """Report whether each output table matches its request under current definitions."""
+    statuses = _table_statuses(args, args.names or None)
+    if args.json:
+        payload = [
+            {"path": str(status.path), "state": status.state, "reason": status.reason}
+            for status in statuses
+        ]
+        print(json.dumps(payload, indent=2))
+        return 0
+    if not statuses:
+        print("no output tables")
+    for status in statuses:
+        reason = f"  ({status.reason})" if status.reason else ""
+        print(f"{status.state:<8} {status.path}{reason}")
+    return 0
+
+
+def gc_command(args: argparse.Namespace) -> int:
+    """Remove stale and broken output tables."""
+    removable = [s for s in _table_statuses(args, None) if s.state != "current"]
+    for status in removable:
+        if args.dry_run:
+            print(f"would remove {status.path} ({status.state})")
+        else:
+            shutil.rmtree(status.path)
+            print(f"removed {status.path} ({status.state})")
+    if not removable:
+        print("nothing to remove")
     return 0
 
 

@@ -318,3 +318,9 @@ def test_document_digest_ignores_ids_and_metadata(inputs):
     a, b, c = (corpus(inputs, name).documents[0] for name in "abc")
     assert a.digest == b.digest
     assert a.digest != c.digest
+
+
+def test_delimited_region_with_a_tab_is_rejected(inputs):
+    write(inputs / "p.txt", "a\tb|c\n")
+    sidecar(inputs, "p", region_delimiter="|")
+    assert "region 1 contains a tab" in problems(inputs, "p")

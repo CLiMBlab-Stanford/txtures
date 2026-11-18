@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 import pytest
 from conftest import write
@@ -100,3 +101,62 @@ def test_inputs_check_unknown_name_is_an_error(capsys, tmp_path):
     (tmp_path / "inputs").mkdir()
     assert main(["--inputs", str(tmp_path / "inputs"), "inputs", "check", "nope"]) == 1
     assert "no input named 'nope'" in capsys.readouterr().err
+
+
+@pytest.fixture
+def fake_engine(monkeypatch, tmp_path):
+    """Run CLI engine commands against the stand-in modules in temporary stores."""
+    import fake_modules
+
+    from textures import cli
+    from textures.definitions import Definitions
+
+    fake_modules.reset()
+    monkeypatch.setattr(
+        cli, "_definitions", lambda settings: Definitions.packaged(fake_modules.registry())
+    )
+    for key in ("inputs", "derivatives", "resources", "items"):
+        monkeypatch.setenv(f"TEXTURES_{key.upper()}", str(tmp_path / key))
+    write(tmp_path / "inputs" / "doc.txt", "The horse raced.\nIt fell.\n")
+    yield tmp_path
+    fake_modules.reset()
+
+
+def test_plan_run_status_and_gc(capsys, fake_engine):
+    assert main(["plan", "doc", "--json"]) == 0
+    plan = json.loads(capsys.readouterr().out)
+    assert plan["table_current"] is False
+    assert plan["columns"] == ["length", "double"]
+    scores = next(v for v in plan["variants"] if v["persisted"])
+    assert (scores["present"], scores["missing"]) == (0, 2)
+    assert any("revision is not pinned" in note for note in plan["notes"])
+
+    assert main(["run", "doc"]) == 0
+    out = capsys.readouterr()
+    assert "fake_scores [main]: 2 computed, 0 reused" in out.out
+    assert "computing 2 of 2 items" in out.err
+    table = Path(plan["table"])
+    assert (table / "doc.tsv").is_file()
+
+    assert main(["run", "doc"]) == 0
+    assert "is already current" in capsys.readouterr().out
+
+    write(fake_engine / "inputs" / "doc.txt", "Something else.\n")
+    assert main(["run", "doc"]) == 0
+    capsys.readouterr()
+    assert main(["status"]) == 0
+    status = capsys.readouterr().out
+    assert status.count("current") == 1 and status.count("stale") == 1
+
+    assert main(["gc", "--dry-run"]) == 0
+    assert f"would remove {table} (stale)" in capsys.readouterr().out
+    assert table.exists()
+    assert main(["gc"]) == 0
+    assert not table.exists()
+    assert main(["gc"]) == 0
+    assert "nothing to remove" in capsys.readouterr().out
+
+
+def test_run_rejects_unknown_workflow(capsys, fake_engine):
+    assert main(["run", "doc", "-w", "missing"]) == 1
+    assert "no workflow named 'missing'" in capsys.readouterr().err

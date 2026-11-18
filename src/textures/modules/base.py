@@ -3,10 +3,15 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Iterable, Iterator, Mapping
-from typing import ClassVar
+from collections.abc import Iterable, Iterator, Mapping, Sequence
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, ClassVar
 
+import numpy as np
 from pydantic import BaseModel, ConfigDict
+
+from textures.corpus import Corpus, Document
 
 NAME_PATTERN = re.compile(r"[a-z][a-z0-9_]*")
 
@@ -20,10 +25,64 @@ class ModuleConfig(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, use_attribute_docstrings=True)
 
 
+@dataclass(frozen=True)
+class RunContext:
+    """Execution settings passed to modules and resources. They never affect results."""
+
+    device: str = "auto"
+    hf_cache: Path | None = None
+
+
+class Resource:
+    """A text-independent input to a module, such as a model, stored in the resource store.
+
+    A resource is described by a JSON-compatible `spec`. Before planning,
+    `resolve` turns the spec into a fully determined form, for example by
+    replacing a missing model revision with the current commit hash. The
+    resource's identity is the digest of its kind, version, and resolved spec.
+
+    Attributes:
+        kind: Unique resource kind, used as a directory name in the store.
+        version: Increment whenever the same resolved spec would build or
+            load differently.
+    """
+
+    kind: ClassVar[str]
+    version: ClassVar[int]
+
+    def __init__(self, spec: Mapping[str, Any]):
+        self.spec = dict(spec)
+
+    def resolve(self, context: RunContext) -> dict[str, Any]:
+        """Return the fully determined spec. The default returns `spec` unchanged."""
+        return dict(self.spec)
+
+    def build(self, resolved: Mapping[str, Any], directory: Path, context: RunContext) -> None:
+        """Write the resource's files into `directory`. The default writes nothing."""
+
+    def load(self, resolved: Mapping[str, Any], directory: Path, context: RunContext) -> Any:
+        """Return the in-memory object that modules receive."""
+        raise NotImplementedError
+
+
+@dataclass(frozen=True)
+class Item:
+    """What a module receives to compute one document's result."""
+
+    document: Document
+    upstream: Mapping[str, Any]
+    """Results of the upstream modules for the same document, by module name."""
+    resources: Mapping[str, Any]
+    """Loaded resources, by the names the module gave them."""
+
+
 class Module:
     """A unit of computation that textures can plan, cache, and run.
 
-    Subclasses set the class attributes below and are added to a `Registry`.
+    Subclasses set the class attributes below, implement `run` or
+    `run_batch`, and are added to a `Registry`. Every module processes one
+    document at a time; its result for a document may be any value its
+    `save` and `load` can store.
 
     Attributes:
         name: Unique module name, used as a directory name in definitions
@@ -40,6 +99,9 @@ class Module:
             config fields one sweep entry may set, starting with the key
             itself; for example, a `model` entry may also set `revision`.
             Order determines the order in which sweeps expand.
+        persist: Whether results are kept in the item store. Cheap modules
+            set this to false and are recomputed whenever they are needed.
+        batch_size: Maximum number of documents passed to one `run_batch` call.
     """
 
     name: ClassVar[str]
@@ -48,6 +110,48 @@ class Module:
     requires: ClassVar[tuple[str, ...]] = ()
     features: ClassVar[tuple[str, ...]] = ()
     sweeps: ClassVar[Mapping[str, tuple[str, ...]]] = {}
+    persist: ClassVar[bool] = True
+    batch_size: ClassVar[int] = 1
+
+    def resources(self, config: ModuleConfig) -> Mapping[str, Resource]:
+        """Return the resources a config needs, by name. The default needs none."""
+        return {}
+
+    def check(self, config: ModuleConfig, corpus: Corpus) -> list[str]:
+        """Return reasons the config cannot process `corpus`. The default finds none."""
+        return []
+
+    def notes(self, config: ModuleConfig) -> list[str]:
+        """Return warnings about a config that does not prevent running it."""
+        return []
+
+    def run(self, config: ModuleConfig, item: Item, context: RunContext) -> Any:
+        """Compute the result for one document."""
+        raise NotImplementedError(f"module {self.name} implements neither run nor run_batch")
+
+    def run_batch(
+        self, config: ModuleConfig, items: Sequence[Item], context: RunContext
+    ) -> list[Any]:
+        """Compute results for several documents. The default calls `run` for each."""
+        return [self.run(config, item, context) for item in items]
+
+    def save(self, result: Any, directory: Path) -> None:
+        """Store a result in `directory`.
+
+        The default stores a mapping of names to arrays as `data.npz`, without
+        pickling.
+        """
+        arrays = {name: np.asarray(value) for name, value in result.items()}
+        np.savez(directory / "data.npz", **arrays)
+
+    def load(self, directory: Path) -> Any:
+        """Read a result written by `save`."""
+        with np.load(directory / "data.npz", allow_pickle=False) as data:
+            return {name: data[name] for name in data.files}
+
+    def columns(self, config: ModuleConfig, document: Document, result: Any) -> Mapping[str, Any]:
+        """Return one sequence per feature, each with one value per region of `document`."""
+        return {}
 
 
 class Registry:
@@ -93,6 +197,8 @@ class Registry:
                         f"module {name!r} field {field_name!r} belongs to more than one sweep"
                     )
                 grouped.add(field_name)
+        if not isinstance(module.batch_size, int) or module.batch_size < 1:
+            raise ValueError(f"module {name!r} batch_size must be a positive integer")
         for feature in module.features:
             if not NAME_PATTERN.fullmatch(feature):
                 raise ValueError(

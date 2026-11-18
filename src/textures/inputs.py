@@ -288,6 +288,13 @@ def _split_document(
                     report.error(location, f"{where}region {number} is empty")
                     ok = False
                     continue
+                if "\t" in region:
+                    where = f"sentence {sentence_id}, " if sentence_id else ""
+                    report.error(
+                        location, f"{where}region {number} contains a tab, which TSV cannot hold"
+                    )
+                    ok = False
+                    continue
                 builder.add_region(region)
         builder.end_sentence()
     return builder if ok else None
