@@ -1,0 +1,41 @@
+# Python environments, bytecode, and package builds
+/.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+/build/
+/dist/
+
+# Test and documentation build output
+.pytest_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+/htmlcov/
+/docs/_build/
+.ipynb_checkpoints/
+
+# Local plans and agent workspace state; repository policy files remain tracked
+/plans/
+/.agents/
+/.codex/
+/.claude/
+
+# Local textures stores and outputs created while developing
+/inputs/
+/derivatives/
+/resources/
+/items/
+/textures.yml
+
+# Environment secrets; keep example files available for version control
+.env
+.env.*
+!.env.example
+
+# Editor and operating-system files
+/.idea/
+/.vscode/
+*.swp
+*~
+.DS_Store
