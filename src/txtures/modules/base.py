@@ -11,7 +11,7 @@ from typing import Any, ClassVar
 import numpy as np
 from pydantic import BaseModel, ConfigDict
 
-from textures.corpus import Corpus, Document
+from txtures.corpus import Corpus, Document
 
 NAME_PATTERN = re.compile(r"[a-z][a-z0-9_]*")
 
@@ -82,7 +82,7 @@ class Item:
 
 
 class Module:
-    """A unit of computation that textures can plan, cache, and run.
+    """A unit of computation that txtures can plan, cache, and run.
 
     Subclasses set the class attributes below, implement `run` or
     `run_batch`, and are added to a `Registry`. Every module processes one

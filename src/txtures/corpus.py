@@ -10,7 +10,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from functools import cached_property
 
-from textures.identity import digest
+from txtures.identity import digest
 
 RESERVED_COLUMNS = frozenset(
     {"doc_id", "sentence_id", "region_index", "region", "char_start", "char_end", "text"}

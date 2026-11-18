@@ -12,10 +12,10 @@ from conftest import write
 from fake_modules import ORDER
 from test_cli import fake_engine, isolated_settings  # noqa: F401 - fixtures
 
-from textures.cli import main
-from textures.engine import slurm as slurm_jobs
-from textures.engine.slurm import Slurm, batch_script, summarize
-from textures.errors import TexturesError
+from txtures.cli import main
+from txtures.engine import slurm as slurm_jobs
+from txtures.engine.slurm import Slurm, batch_script, summarize
+from txtures.errors import TxturesError
 
 SLURM = {
     "partition": "gpu",
@@ -42,7 +42,7 @@ def test_batch_script_requests_resources_and_runs_a_task():
         "doc",
         3,
         {**SLURM, "account": "lab", "options": ["--exclude=node 1"]},
-        ["/env/bin/python", "-I", "-m", "textures", "worker", "/jobs/x"],
+        ["/env/bin/python", "-I", "-m", "txtures", "worker", "/jobs/x"],
     )
     lines = script.splitlines()
     assert lines[0] == "#!/bin/sh"
@@ -54,15 +54,15 @@ def test_batch_script_requests_resources_and_runs_a_task():
     assert "#SBATCH --account=lab" in lines
     assert "#SBATCH '--exclude=node 1'" in lines
     assert lines[-1] == (
-        'exec /env/bin/python -I -m textures worker /jobs/x "${SLURM_ARRAY_TASK_ID:-0}"'
+        'exec /env/bin/python -I -m txtures worker /jobs/x "${SLURM_ARRAY_TASK_ID:-0}"'
     )
 
 
 def test_batch_script_without_gpus_or_partition():
-    script = batch_script(Path("/j"), "doc", 1, {**SLURM, "gpus": 0}, ["textures"])
+    script = batch_script(Path("/j"), "doc", 1, {**SLURM, "gpus": 0}, ["txtures"])
     assert "--gres" not in script
-    with pytest.raises(TexturesError, match="slurm.partition"):
-        batch_script(Path("/j"), "doc", 1, {**SLURM, "partition": None}, ["textures"])
+    with pytest.raises(TxturesError, match="slurm.partition"):
+        batch_script(Path("/j"), "doc", 1, {**SLURM, "partition": None}, ["txtures"])
 
 
 def test_states_from_sacct_and_squeue():
@@ -91,7 +91,7 @@ def test_submit_reports_sbatch_failure():
     def run(command, **kwargs):
         return completed(returncode=1, stderr="invalid partition")
 
-    with pytest.raises(TexturesError, match="invalid partition"):
+    with pytest.raises(TxturesError, match="invalid partition"):
         Slurm(run).submit(Path("/j/job.sh"))
 
 
@@ -101,10 +101,10 @@ def test_submit_reports_sbatch_failure():
 def test_a_shard_computes_its_own_items_first(tmp_path):
     from test_engine import DOCS, add_input, definitions
 
-    from textures.engine import Executor, plan_request, run_request
-    from textures.modules import RunContext
-    from textures.settings import resolve_settings
-    from textures.store import EntryStore
+    from txtures.engine import Executor, plan_request, run_request
+    from txtures.modules import RunContext
+    from txtures.settings import resolve_settings
+    from txtures.store import EntryStore
 
     locations = {key: str(tmp_path / key) for key in ("inputs", "derivatives", "items")}
     locations["resources"] = str(tmp_path / "resources")
@@ -145,12 +145,12 @@ class FakeSlurm(Slurm):
 
 @pytest.fixture
 def fake_slurm(monkeypatch, fake_engine):  # noqa: F811
-    from textures import cli
+    from txtures import cli
 
     slurm = FakeSlurm()
     monkeypatch.setattr(cli, "_slurm", lambda: slurm)
     write(
-        fake_engine / "home" / ".config" / "textures" / "settings.yml",
+        fake_engine / "home" / ".config" / "txtures" / "settings.yml",
         "execution:\n  executor: slurm\nslurm:\n  partition: gpu\n  workers: 2\n",
     )
     return slurm
@@ -213,17 +213,17 @@ def test_local_flag_and_workers_option(capsys, fake_slurm):
 def test_real_slurm_job(tmp_path):
     """Submit a two-task job that scores a toy model on CPU.
 
-    Needs `TEXTURES_TEST_SLURM_PARTITION` and `TEXTURES_TEST_SLURM_DIR`, a
+    Needs `TXTURES_TEST_SLURM_PARTITION` and `TXTURES_TEST_SLURM_DIR`, a
     directory that compute nodes can read and write, and
-    `TEXTURES_TEST_SLURM_ACCOUNT` where the cluster requires an account.
+    `TXTURES_TEST_SLURM_ACCOUNT` where the cluster requires an account.
     """
     import toy_lm
 
-    partition = os.environ.get("TEXTURES_TEST_SLURM_PARTITION")
-    shared = os.environ.get("TEXTURES_TEST_SLURM_DIR")
-    account = os.environ.get("TEXTURES_TEST_SLURM_ACCOUNT")
+    partition = os.environ.get("TXTURES_TEST_SLURM_PARTITION")
+    shared = os.environ.get("TXTURES_TEST_SLURM_DIR")
+    account = os.environ.get("TXTURES_TEST_SLURM_ACCOUNT")
     if not partition or not shared or shutil.which("sbatch") is None:
-        pytest.skip("set TEXTURES_TEST_SLURM_PARTITION and TEXTURES_TEST_SLURM_DIR")
+        pytest.skip("set TXTURES_TEST_SLURM_PARTITION and TXTURES_TEST_SLURM_DIR")
     root = Path(shared) / f"test-{os.getpid()}-{time.time_ns()}"
     try:
         model = toy_lm.build(root / "model")
@@ -232,7 +232,7 @@ def test_real_slurm_job(tmp_path):
         rows = "".join(f"{n}\tab ba b a\n" if n % 2 else f"{n}\tb ab\n" for n in range(6))
         write(root / "inputs" / "doc.tsv", "doc_id\ttext\n" + rows)
         write(
-            root / "home" / ".config" / "textures" / "settings.yml",
+            root / "home" / ".config" / "txtures" / "settings.yml",
             f"execution:\n  executor: slurm\n  device: cpu\nslurm:\n  partition: {partition}\n"
             "  gpus: 0\n  cpus: 1\n  memory_gb: 4\n  time_hours: 1\n"
             + (f"  account: {account}\n" if account else ""),
@@ -242,13 +242,13 @@ def test_real_slurm_job(tmp_path):
             "HOME": str(root / "home"),
             "XDG_CONFIG_HOME": str(root / "home" / ".config"),
             **{
-                f"TEXTURES_{key.upper()}": str(root / key)
+                f"TXTURES_{key.upper()}": str(root / key)
                 for key in ("definitions", "inputs", "derivatives", "items", "resources")
             },
         }
-        textures = [sys.executable, "-I", "-m", "textures"]
+        txtures = [sys.executable, "-I", "-m", "txtures"]
         submitted = subprocess.run(
-            [*textures, "run", "doc", "-w", "toy", "--workers", "2"],
+            [*txtures, "run", "doc", "-w", "toy", "--workers", "2"],
             env=env,
             capture_output=True,
             text=True,
@@ -259,7 +259,7 @@ def test_real_slurm_job(tmp_path):
         while time.monotonic() < deadline:
             status = json.loads(
                 subprocess.run(
-                    [*textures, "status", "--json"], env=env, capture_output=True, text=True
+                    [*txtures, "status", "--json"], env=env, capture_output=True, text=True
                 ).stdout
             )
             (job,) = status["jobs"]

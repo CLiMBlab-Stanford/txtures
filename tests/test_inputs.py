@@ -4,8 +4,8 @@ from pathlib import Path
 import pytest
 from conftest import write
 
-from textures.errors import InputError, TexturesError
-from textures.inputs import (
+from txtures.errors import InputError, TxturesError
+from txtures.inputs import (
     DOCUMENT_PER_ROW,
     PLAIN_TEXT,
     REGION_PER_ROW,
@@ -81,9 +81,9 @@ def test_invalid_basename_is_a_problem(inputs):
 
 
 def test_missing_input_and_directory(inputs, tmp_path):
-    with pytest.raises(TexturesError, match="no input named 'x'"):
+    with pytest.raises(TxturesError, match="no input named 'x'"):
         load_input(inputs, "x")
-    with pytest.raises(TexturesError, match="does not exist"):
+    with pytest.raises(TxturesError, match="does not exist"):
         load_input(tmp_path / "absent", "x")
 
 

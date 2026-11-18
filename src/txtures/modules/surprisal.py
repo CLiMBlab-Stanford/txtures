@@ -22,9 +22,9 @@ from typing import Literal
 
 import numpy as np
 
-from textures.corpus import Document
-from textures.errors import TexturesError
-from textures.modules.base import Item, Module, ModuleConfig, RunContext
+from txtures.corpus import Document
+from txtures.errors import TxturesError
+from txtures.modules.base import Item, Module, ModuleConfig, RunContext
 
 
 class SurprisalConfig(ModuleConfig):
@@ -41,7 +41,7 @@ def region_tokens(document: Document, char_start, char_end) -> list[tuple[int, i
     """Return the `(first, stop)` token range of each region of `document`.
 
     Raises:
-        TexturesError: A token's non-whitespace text spans more than one
+        TxturesError: A token's non-whitespace text spans more than one
             region, or tokens are out of order.
     """
     ends = [end for _, end in document.regions]
@@ -53,12 +53,12 @@ def region_tokens(document: Document, char_start, char_end) -> list[tuple[int, i
         if region < len(ends) and text.strip():
             first = start + len(text) - len(text.lstrip())
             if first < document.regions[region][0]:
-                raise TexturesError(
+                raise TxturesError(
                     f"document {document.doc_id!r}: token {text!r} spans more than one region"
                 )
         assigned.append(region)
     if any(b < a for a, b in zip(assigned, assigned[1:], strict=False)):
-        raise TexturesError(f"document {document.doc_id!r}: tokens are out of order")
+        raise TxturesError(f"document {document.doc_id!r}: tokens are out of order")
     ranges = []
     for region in range(len(ends)):
         ranges.append((bisect.bisect_left(assigned, region), bisect.bisect_right(assigned, region)))
@@ -73,7 +73,7 @@ def region_surprisal(
     boundary = scores["boundary_logprob"].astype(np.float64)
     context = scores["context"]
     if correction == "word_boundary" and len(boundary) and np.isnan(boundary).all():
-        raise TexturesError(
+        raise TxturesError(
             "lm_scores could not detect word boundaries for this model's tokenizer; "
             "use correction: none"
         )

@@ -1,6 +1,6 @@
 """Definitions stores: configs, workflows, and their resolution into variants."""
 
-from textures.definitions.resolution import (
+from txtures.definitions.resolution import (
     Column,
     Definitions,
     Expansion,
@@ -8,7 +8,7 @@ from textures.definitions.resolution import (
     ResolvedConfig,
     Variant,
 )
-from textures.definitions.store import init_store, read_store
+from txtures.definitions.store import init_store, read_store
 
 __all__ = [
     "Column",

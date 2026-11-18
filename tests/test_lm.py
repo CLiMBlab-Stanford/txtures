@@ -10,15 +10,15 @@ import torch
 import toy_lm
 from conftest import write
 
-from textures.corpus import Document, Sentence
-from textures.definitions import Definitions
-from textures.engine import Executor, plan_request, run_request
-from textures.errors import DefinitionError, TexturesError
-from textures.modules import REGISTRY, Item, RunContext
-from textures.modules.hf_model import HFModel, directory_digest
-from textures.modules.lm_scores import LMScores, LMScoresConfig, score_sequences, windows
-from textures.modules.surprisal import Surprisal, SurprisalConfig, region_surprisal
-from textures.settings import resolve_settings
+from txtures.corpus import Document, Sentence
+from txtures.definitions import Definitions
+from txtures.engine import Executor, plan_request, run_request
+from txtures.errors import DefinitionError, TxturesError
+from txtures.modules import REGISTRY, Item, RunContext
+from txtures.modules.hf_model import HFModel, directory_digest
+from txtures.modules.lm_scores import LMScores, LMScoresConfig, score_sequences, windows
+from txtures.modules.surprisal import Surprisal, SurprisalConfig, region_surprisal
+from txtures.settings import resolve_settings
 
 LN2 = math.log(2)
 
@@ -298,7 +298,7 @@ def test_sliding_window_scores_come_from_their_window(lms):
 
 
 def test_window_longer_than_model_is_rejected(lms):
-    with pytest.raises(TexturesError, match="exceeds the maximum context length"):
+    with pytest.raises(TxturesError, match="exceeds the maximum context length"):
         scores(lms("eos"), [document(["a"])], window=32)
 
 
@@ -341,9 +341,9 @@ def test_document_start_without_special_tokens_is_refused_unless_none(toy_models
         "dtype": "float32",
         "document_start": "auto",
     }
-    with pytest.raises(TexturesError, match="declares neither a BOS nor an EOS"):
+    with pytest.raises(TxturesError, match="declares neither a BOS nor an EOS"):
         HFModel(spec).resolve(RunContext())
-    with pytest.raises(TexturesError, match="no BOS token"):
+    with pytest.raises(TxturesError, match="no BOS token"):
         HFModel({**spec, "document_start": "bos"}).resolve(RunContext())
     assert lms("bare", "none").start_ids == []
 
@@ -355,7 +355,7 @@ def test_revision_cannot_be_set_for_local_model(toy_models):
         "dtype": "float32",
         "document_start": "auto",
     }
-    with pytest.raises(TexturesError, match="local model directory"):
+    with pytest.raises(TxturesError, match="local model directory"):
         HFModel(spec).resolve(RunContext())
 
 
@@ -376,7 +376,7 @@ def test_token_spanning_regions_is_rejected():
         "boundary_logprob": np.zeros(2),
         "context": np.zeros(2, dtype=np.int32),
     }
-    with pytest.raises(TexturesError, match="spans more than one region"):
+    with pytest.raises(TxturesError, match="spans more than one region"):
         region_surprisal(doc, tokens, "none")
 
 
@@ -403,7 +403,7 @@ def test_undetected_boundaries_refuse_correction():
         "boundary_logprob": np.full(1, np.nan),
         "context": np.zeros(1, dtype=np.int32),
     }
-    with pytest.raises(TexturesError, match="correction: none"):
+    with pytest.raises(TxturesError, match="correction: none"):
         region_surprisal(doc, tokens, "word_boundary")
     assert region_surprisal(doc, tokens, "none").tolist() == [0.0]
 
@@ -447,7 +447,7 @@ def env(tmp_path: Path, toy_models):
 
 
 def run(settings, workflow):
-    from textures.store import EntryStore
+    from txtures.store import EntryStore
 
     definitions = Definitions.load(settings.definitions, REGISTRY)
     plan = plan_request(settings, definitions, "doc", workflow)

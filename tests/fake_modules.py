@@ -17,7 +17,7 @@ from typing import Literal
 
 import numpy as np
 
-from textures.modules import Item, Module, ModuleConfig, Registry, Resource, RunContext
+from txtures.modules import Item, Module, ModuleConfig, Registry, Resource, RunContext
 
 CALLS: Counter[str] = Counter()
 ORDER: list[str] = []

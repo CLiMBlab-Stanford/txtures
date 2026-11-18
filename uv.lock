@@ -2,14 +2,14 @@ version = 1
 revision = 5
 requires-python = ">=3.12"
 resolution-markers = [
-    "extra != 'extra-8-textures-cpu' and extra == 'extra-8-textures-cuda'",
-    "sys_platform != 'darwin' and extra == 'extra-8-textures-cpu' and extra != 'extra-8-textures-cuda'",
-    "sys_platform == 'darwin' and extra == 'extra-8-textures-cpu' and extra != 'extra-8-textures-cuda'",
-    "extra != 'extra-8-textures-cpu' and extra != 'extra-8-textures-cuda'",
+    "extra != 'extra-7-txtures-cpu' and extra == 'extra-7-txtures-cuda'",
+    "sys_platform != 'darwin' and extra == 'extra-7-txtures-cpu' and extra != 'extra-7-txtures-cuda'",
+    "sys_platform == 'darwin' and extra == 'extra-7-txtures-cpu' and extra != 'extra-7-txtures-cuda'",
+    "extra != 'extra-7-txtures-cpu' and extra != 'extra-7-txtures-cuda'",
 ]
 conflicts = [[
-    { package = "textures", extra = "cpu" },
-    { package = "textures", extra = "cuda" },
+    { package = "txtures", extra = "cpu" },
+    { package = "txtures", extra = "cuda" },
 ]]
 
 [[package]]
@@ -1161,7 +1161,7 @@ wheels = [
 ]
 
 [[package]]
-name = "textures"
+name = "txtures"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
@@ -1175,8 +1175,8 @@ dependencies = [
 
 [package.optional-dependencies]
 cpu = [
-    { name = "torch", version = "2.15.0", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(sys_platform == 'darwin' and extra == 'extra-8-textures-cpu') or (extra == 'extra-8-textures-cpu' and extra == 'extra-8-textures-cuda')" },
-    { name = "torch", version = "2.15.0+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(sys_platform != 'darwin' and extra == 'extra-8-textures-cpu') or (extra == 'extra-8-textures-cpu' and extra == 'extra-8-textures-cuda')" },
+    { name = "torch", version = "2.15.0", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(sys_platform == 'darwin' and extra == 'extra-7-txtures-cpu') or (extra == 'extra-7-txtures-cpu' and extra == 'extra-7-txtures-cuda')" },
+    { name = "torch", version = "2.15.0+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(sys_platform != 'darwin' and extra == 'extra-7-txtures-cpu') or (extra == 'extra-7-txtures-cpu' and extra == 'extra-7-txtures-cuda')" },
 ]
 cuda = [
     { name = "torch", version = "2.15.0", source = { registry = "https://pypi.org/simple" } },
@@ -1195,7 +1195,7 @@ requires-dist = [
     { name = "pandas", specifier = ">=2.2,<3" },
     { name = "pydantic", specifier = ">=2.7,<3" },
     { name = "pyyaml", specifier = ">=6,<7" },
-    { name = "torch", marker = "extra == 'cpu'", specifier = ">=2.4,<3", index = "https://download.pytorch.org/whl/cpu", conflict = { package = "textures", extra = "cpu" } },
+    { name = "torch", marker = "extra == 'cpu'", specifier = ">=2.4,<3", index = "https://download.pytorch.org/whl/cpu", conflict = { package = "txtures", extra = "cpu" } },
     { name = "torch", marker = "extra == 'cuda'", specifier = ">=2.4,<3" },
     { name = "transformers", specifier = ">=5,<6" },
 ]
@@ -1272,7 +1272,7 @@ version = "2.15.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "cuda-bindings", marker = "python_full_version < '3.15' and sys_platform == 'linux'" },
-    { name = "cuda-toolkit", extra = ["cublas", "cudart", "cufft", "cufile", "cupti", "cusolver", "cusparse", "nvjitlink", "nvrtc", "nvtx"], marker = "(sys_platform == 'linux' or extra == 'extra-8-textures-cpu') and extra == 'extra-8-textures-cuda'" },
+    { name = "cuda-toolkit", extra = ["cublas", "cudart", "cufft", "cufile", "cupti", "cusolver", "cusparse", "nvjitlink", "nvrtc", "nvtx"], marker = "(sys_platform == 'linux' or extra == 'extra-7-txtures-cpu') and extra == 'extra-7-txtures-cuda'" },
     { name = "filelock" },
     { name = "fsspec" },
     { name = "jinja2" },

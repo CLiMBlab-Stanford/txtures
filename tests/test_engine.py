@@ -9,13 +9,13 @@ import pytest
 from conftest import write
 from fake_modules import CALLS, STATE
 
-from textures.definitions import Definitions
-from textures.engine import Executor, item_status, plan_request, run_request, table_statuses
-from textures.engine.tables import format_value, replanner
-from textures.errors import DefinitionError, TexturesError
-from textures.modules import RunContext
-from textures.settings import resolve_settings
-from textures.store import EntryStore, try_lock
+from txtures.definitions import Definitions
+from txtures.engine import Executor, item_status, plan_request, run_request, table_statuses
+from txtures.engine.tables import format_value, replanner
+from txtures.errors import DefinitionError, TxturesError
+from txtures.modules import RunContext
+from txtures.settings import resolve_settings
+from txtures.store import EntryStore, try_lock
 
 
 @pytest.fixture(autouse=True)
@@ -375,5 +375,5 @@ def test_format_value(value, text):
 
 
 def test_format_value_rejects_tabs():
-    with pytest.raises(TexturesError, match="tab or line break"):
+    with pytest.raises(TxturesError, match="tab or line break"):
         format_value("a\tb")

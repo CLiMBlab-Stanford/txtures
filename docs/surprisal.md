@@ -24,7 +24,7 @@ A revision that is unset or names a branch or tag is resolved to a commit
 hash when a run is planned, and the hash is part of the results' identity. A
 new commit on the hub therefore makes earlier tables stale, and every run of
 an unpinned model prints a note. Pin `revision` to a commit hash for
-reproducible results. If the hub cannot be reached, textures uses the commit
+reproducible results. If the hub cannot be reached, txtures uses the commit
 the local cache records. A local model directory is identified by a digest of
 its files, and `revision` may not be set for it.
 
@@ -64,7 +64,7 @@ word. For the first region of a context, *P(B | c)* is 1. The term after the
 last region comes from the model's prediction after the final token, so the
 last word needs no approximation.
 
-textures finds *B* by decoding each token after the text `a` and checking
+txtures finds *B* by decoding each token after the text `a` and checking
 whether the result begins with whitespace. The end-of-sequence token is in
 *B*. If a tokenizer does not mark word starts in a way this test detects,
 `word_boundary` correction refuses to run, and `correction: none` is the only
@@ -72,7 +72,7 @@ choice.
 
 ## Tokenization
 
-textures gives each model the document text as written and tokenizes it with
+txtures gives each model the document text as written and tokenizes it with
 the tokenizer's defaults. It does not add or move spaces to make words look
 alike to the model. With GPT-2-style tokenizers, the first word of a document
 has no leading space and later words do. SentencePiece tokenizers such as
@@ -84,7 +84,7 @@ character. Whitespace-only tokens between regions therefore belong to the
 next region.
 
 The start of each context is marked as the model saw document starts in
-training. With `document_start: auto`, textures reads the convention from the
+training. With `document_start: auto`, txtures reads the convention from the
 tokenizer:
 
 1. A tokenizer that adds its beginning-of-sequence token itself (Llama,

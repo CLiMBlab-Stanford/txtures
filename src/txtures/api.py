@@ -1,12 +1,12 @@
 """The Python API: the same requests as the command line, from Python.
 
-`run` is `textures run`: it computes a named input's request and writes the
+`run` is `txtures run`: it computes a named input's request and writes the
 same output table, then returns the table. `compute` computes features of
 text given directly and returns the table without writing one. Both use the
 configured item and resource stores, so repeated calls reuse earlier work.
 
 The API always computes in the calling process, whatever
-`execution.executor` says; submit Slurm jobs with `textures run`.
+`execution.executor` says; submit Slurm jobs with `txtures run`.
 
 The API does not change the process environment. It passes its Hugging
 Face cache and token to the Hugging Face libraries directly, so a host
@@ -14,7 +14,7 @@ program's own use of those libraries is unaffected.
 
 When the definitions store, item store, and resources all come from
 built-in defaults, the first call warns once and suggests how to point
-textures at shared locations.
+txtures at shared locations.
 """
 
 from __future__ import annotations
@@ -24,19 +24,19 @@ from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from textures import environment, installation
-from textures.definitions import Definitions
-from textures.definitions.resolution import EXTENDS, MAIN
-from textures.definitions.store import Definition, StoreContents
-from textures.engine import Executor, Plan, plan_request, run_request
-from textures.engine.tables import read_table, table_frame
+from txtures import environment, installation
+from txtures.definitions import Definitions
+from txtures.definitions.resolution import EXTENDS, MAIN
+from txtures.definitions.store import Definition, StoreContents
+from txtures.engine import Executor, Plan, plan_request, run_request
+from txtures.engine.tables import read_table, table_frame
 
 __all__ = ["compute", "read_table", "run"]
-from textures.errors import DefinitionError, InputError, Problem
-from textures.inputs import InputSettings, read_texts
-from textures.modules import REGISTRY
-from textures.settings import Settings, resolve_settings, uses_default_locations
-from textures.store import EntryStore
+from txtures.errors import DefinitionError, InputError, Problem
+from txtures.inputs import InputSettings, read_texts
+from txtures.modules import REGISTRY
+from txtures.settings import Settings, resolve_settings, uses_default_locations
+from txtures.store import EntryStore
 
 if TYPE_CHECKING:
     import pandas as pd
@@ -45,18 +45,18 @@ Texts = str | Sequence[str | Sequence[str]] | Mapping[str, str | Sequence[str]]
 
 
 DEFAULT_LOCATIONS_MESSAGE = """\
-textures is using its default locations in your home directory, so it shares no
+txtures is using its default locations in your home directory, so it shares no
 results with others. To use a shared site, run once:
 
-    textures site use /path/to/textures-definitions
+    txtures site use /path/to/txtures-definitions
 
 or set locations one at a time:
 
-    textures site set items /path/to/items
-    textures site set resources /path/to/textures-resources
+    txtures site set items /path/to/items
+    txtures site set resources /path/to/txtures-resources
 
-`textures site ls` lists every setting. Environment variables such as
-TEXTURES_DEFINITIONS, and arguments to the Python API, also set locations."""
+`txtures site ls` lists every setting. Environment variables such as
+TXTURES_DEFINITIONS, and arguments to the Python API, also set locations."""
 
 _warned_defaults = False
 
@@ -129,13 +129,13 @@ def run(
 ) -> pd.DataFrame:
     """Compute a request for the input `name` and return its output table.
 
-    This is `textures run NAME --workflow WORKFLOW --modules ...`: the table
+    This is `txtures run NAME --workflow WORKFLOW --modules ...`: the table
     is written to the derivatives directory, or reused if it is current, and
     then read with `read_table`. The keyword arguments override settings for
     this call; `progress`, if given, receives progress messages.
 
     Raises:
-        TexturesError: The input, definitions, or settings are invalid, or a
+        TxturesError: The input, definitions, or settings are invalid, or a
             computation failed.
     """
     resolved = settings(
@@ -187,13 +187,13 @@ def compute(
       definitions store, so the call alone determines the result. Modules
       not named use their packaged defaults.
     - Otherwise the definitions store's `workflow` (default `main`) chooses
-      them, as for `textures run`.
+      them, as for `txtures run`.
 
     The table has the columns of an output table. No table is written, but
     computed items are stored and reused.
 
     Raises:
-        TexturesError: The text, configs, or settings are invalid, or a
+        TxturesError: The text, configs, or settings are invalid, or a
             computation failed.
     """
     if config is not None and workflow is not None:

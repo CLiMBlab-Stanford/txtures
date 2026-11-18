@@ -18,11 +18,11 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import Any
 
-from textures.corpus import Document
-from textures.engine.planning import Plan, PlannedResource, PlannedVariant, item_kind
-from textures.errors import TexturesError
-from textures.modules import Item, RunContext
-from textures.store import EntryStore
+from txtures.corpus import Document
+from txtures.engine.planning import Plan, PlannedResource, PlannedVariant, item_kind
+from txtures.errors import TxturesError
+from txtures.modules import Item, RunContext
+from txtures.store import EntryStore
 
 Progress = Callable[[str], None]
 
@@ -86,7 +86,7 @@ class Executor:
         if resource.identity not in self._loaded:
             directory = self.resource_store.get(resource.kind, resource.identity)
             if directory is None:
-                raise TexturesError(f"resource {resource.kind} {resource.identity} is missing")
+                raise TxturesError(f"resource {resource.kind} {resource.identity} is missing")
             self._loaded[resource.identity] = resource.resource.load(
                 resource.resolved, directory, self.context
             )
@@ -107,7 +107,7 @@ class Executor:
         items = [self._item(planned, document) for document in documents]
         results = planned.module.run_batch(planned.variant.config, items, self.context)
         if len(results) != len(documents):
-            raise TexturesError(
+            raise TxturesError(
                 f"module {planned.name} returned {len(results)} results for "
                 f"{len(documents)} documents"
             )
@@ -235,7 +235,7 @@ class Executor:
                         self._compute_and_publish(planned, [document])
                 directory = self.items.get(kind, identity)
                 if directory is None:
-                    raise TexturesError(f"item {identity} of {planned.name} is missing")
+                    raise TxturesError(f"item {identity} of {planned.name} is missing")
             value = planned.module.load(directory)
         else:
             (value,) = self._compute(planned, [document])

@@ -3,8 +3,8 @@ import os
 import pytest
 from conftest import write
 
-from textures.definitions import Definitions, init_store
-from textures.errors import TexturesError
+from txtures.definitions import Definitions, init_store
+from txtures.errors import TxturesError
 
 
 def messages(store) -> list[str]:
@@ -32,12 +32,12 @@ def test_init_example_workflow_resolves_to_pythia(tmp_path):
 def test_init_refuses_an_existing_path(tmp_path):
     root = tmp_path / "defs"
     root.mkdir()
-    with pytest.raises(TexturesError, match="already exists"):
+    with pytest.raises(TxturesError, match="already exists"):
         init_store(root)
 
 
 def test_missing_store_is_an_error(tmp_path):
-    with pytest.raises(TexturesError, match="textures def init"):
+    with pytest.raises(TxturesError, match="txtures def init"):
         Definitions.load(tmp_path / "absent")
 
 
@@ -80,7 +80,7 @@ def test_validate_checks_unused_configs_and_every_workflow(store):
 
 
 def test_heartbeat_keeps_held_locks_fresh(tmp_path):
-    from textures.store import Heartbeat
+    from txtures.store import Heartbeat
 
     path = tmp_path / "entry.lock"
     path.write_text("{}")

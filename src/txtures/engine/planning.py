@@ -15,15 +15,15 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from textures.corpus import Corpus, Document
-from textures.definitions import Column, Definitions, Expansion, Variant
-from textures.environment import run_context
-from textures.errors import DefinitionError, InputError, Problem, TexturesError
-from textures.identity import digest
-from textures.inputs import load_input
-from textures.modules import Module, Resource
-from textures.settings import Settings
-from textures.store import EntryStore
+from txtures.corpus import Corpus, Document
+from txtures.definitions import Column, Definitions, Expansion, Variant
+from txtures.environment import run_context
+from txtures.errors import DefinitionError, InputError, Problem, TxturesError
+from txtures.identity import digest
+from txtures.inputs import load_input
+from txtures.modules import Module, Resource
+from txtures.settings import Settings
+from txtures.store import EntryStore
 
 
 @dataclass(frozen=True)
@@ -164,7 +164,7 @@ def plan_request(
                 if key not in resolved_resources:
                     try:
                         resolved = resource.resolve(context)
-                    except TexturesError as error:
+                    except TxturesError as error:
                         problems.append(Problem(where, str(error)))
                         continue
                     resolved_resources[key] = PlannedResource(

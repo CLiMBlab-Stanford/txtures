@@ -25,9 +25,9 @@ from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
-from textures.corpus import RESERVED_COLUMNS, Corpus, Document, Sentence
-from textures.errors import InputError, Problem, TexturesError
-from textures.identity import digest
+from txtures.corpus import RESERVED_COLUMNS, Corpus, Document, Sentence
+from txtures.errors import InputError, Problem, TxturesError
+from txtures.identity import digest
 
 NAME_PATTERN = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.-]*")
 """Pattern for input basenames."""
@@ -102,10 +102,10 @@ def scan_inputs(root: Path) -> Inventory:
     """Find the inputs in `root`.
 
     Raises:
-        TexturesError: `root` is not a directory.
+        TxturesError: `root` is not a directory.
     """
     if not root.is_dir():
-        raise TexturesError(f"inputs directory {root} does not exist")
+        raise TxturesError(f"inputs directory {root} does not exist")
     inventory = Inventory(root)
     candidates: dict[str, list[Path]] = {}
     sidecars: dict[str, Path] = {}
@@ -531,12 +531,12 @@ def load_input(root: Path, name: str) -> InputReport:
     """Find and read the input `name` in the inputs directory `root`.
 
     Raises:
-        TexturesError: The inputs directory or the named input does not exist.
+        TxturesError: The inputs directory or the named input does not exist.
         InputError: The name is shared by several files or is not a valid name.
     """
     inventory = scan_inputs(root)
     if name not in inventory.inputs:
-        raise TexturesError(f"no input named {name!r} in {root}")
+        raise TxturesError(f"no input named {name!r} in {root}")
     if name in inventory.problems:
         raise InputError(inventory.problems[name])
     return read_input(inventory.inputs[name])

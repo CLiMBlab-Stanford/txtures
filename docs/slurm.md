@@ -1,6 +1,6 @@
 # Slurm
 
-When `execution.executor` is `slurm`, `textures run` submits its computation
+When `execution.executor` is `slurm`, `txtures run` submits its computation
 as a Slurm job array and returns once the job is queued. Choose this at
 installation with `./install --executor slurm`, or set it in personal or site
 settings.
@@ -11,8 +11,8 @@ Set at least the partition, and the account if the cluster requires one,
 in your personal settings or the lab's site settings:
 
 ```bash
-textures site set slurm.partition gpu
-textures site set slurm.account mylab
+txtures site set slurm.partition gpu
+txtures site set slurm.account mylab
 ```
 
 | Key | Default | Meaning |
@@ -29,9 +29,9 @@ textures site set slurm.account mylab
 ## Running
 
 ```console
-$ textures run stimuli --workers 4
+$ txtures run stimuli --workers 4
 submitted job 81234 (4 tasks) to write .../derivatives/stimuli/main-3f9a0c1d2e4b
-logs: .../derivatives/.textures-jobs/stimuli/main-3f9a0c1d2e4b/logs; check progress with `textures status`
+logs: .../derivatives/.txtures-jobs/stimuli/main-3f9a0c1d2e4b/logs; check progress with `txtures status`
 ```
 
 `--workers N` overrides `slurm.workers` for one run, and `--local` computes
@@ -39,7 +39,7 @@ in the calling process instead of submitting. Planning happens before
 submission, so invalid inputs and definitions are reported at once.
 
 If the table is already current, nothing is submitted. If an earlier job for
-the same table is still pending or running, `textures run` reports it and
+the same table is still pending or running, `txtures run` reports it and
 submits nothing.
 
 Tasks share the work. Each task computes its own share of the missing
@@ -50,13 +50,13 @@ another task or a later run computes them.
 
 Each task checks that the input, definitions, and resolved model revisions
 are unchanged since submission, and fails without computing if they are not.
-Run `textures run` again to submit the new request.
+Run `txtures run` again to submit the new request.
 
 ## Following a job
 
-`textures status` lists each recorded job with its task states and log
-directory, under `DERIVATIVES/.textures-jobs/`. Task states come from
-`sacct`, or from `squeue` where accounting is unavailable. `textures gc`
+`txtures status` lists each recorded job with its task states and log
+directory, under `DERIVATIVES/.txtures-jobs/`. Task states come from
+`sacct`, or from `squeue` where accounting is unavailable. `txtures gc`
 removes the records and logs of jobs with no active tasks.
 
 The job runs the same installation that submitted it, so the installation,

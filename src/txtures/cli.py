@@ -1,4 +1,4 @@
-"""Command-line entry point for textures."""
+"""Command-line entry point for txtures."""
 
 from __future__ import annotations
 
@@ -11,9 +11,9 @@ import warnings
 from collections.abc import Sequence
 from pathlib import Path
 
-from textures import __version__, api, environment, installation
-from textures.definitions import Definitions, init_store
-from textures.engine import (
+from txtures import __version__, api, environment, installation
+from txtures.definitions import Definitions, init_store
+from txtures.engine import (
     Executor,
     TableStatus,
     item_status,
@@ -23,10 +23,10 @@ from textures.engine import (
     table_is_current,
     table_statuses,
 )
-from textures.engine import slurm as slurm_jobs
-from textures.errors import Problem, SettingsError, TexturesError
-from textures.inputs import InputReport, load_input, read_input, scan_inputs
-from textures.settings import (
+from txtures.engine import slurm as slurm_jobs
+from txtures.errors import Problem, SettingsError, TxturesError
+from txtures.inputs import InputReport, load_input, read_input, scan_inputs
+from txtures.settings import (
     SITE_DOCUMENT,
     SPECS,
     Settings,
@@ -36,7 +36,7 @@ from textures.settings import (
     unset_personal,
     uses_default_locations,
 )
-from textures.store import EntryStore
+from txtures.store import EntryStore
 
 PATH_FLAGS = {
     "definitions": "definitions store",
@@ -48,12 +48,12 @@ PATH_FLAGS = {
 
 
 def build_parser() -> argparse.ArgumentParser:
-    """Build the argument parser for every textures command."""
+    """Build the argument parser for every txtures command."""
     parser = argparse.ArgumentParser(
-        prog="textures",
+        prog="txtures",
         description="Compute word- and region-level features of text.",
     )
-    parser.add_argument("--version", action="version", version=f"textures {__version__}")
+    parser.add_argument("--version", action="version", version=f"txtures {__version__}")
     for key, description in PATH_FLAGS.items():
         parser.add_argument(
             f"--{key.replace('_', '-')}",
@@ -171,7 +171,7 @@ _noted = False
 
 
 def _settings(args: argparse.Namespace, *, note: bool = True, **overrides: object) -> Settings:
-    """Resolve settings and set the process environment that textures controls.
+    """Resolve settings and set the process environment that txtures controls.
 
     With `note`, prints the default-locations notice when it applies.
     """
@@ -251,7 +251,7 @@ def site_use(args: argparse.Namespace) -> int:
     """Point personal settings at a definitions store, whose site settings name the rest."""
     store = args.path.expanduser().absolute()
     if not store.is_dir():
-        raise TexturesError(f"{store} is not a directory; give the path of a definitions store")
+        raise TxturesError(f"{store} is not a directory; give the path of a definitions store")
     path = set_personal("definitions", [str(store)])
     print(f"set definitions to {store} in {path}")
     if not (store / SITE_DOCUMENT).is_file():
@@ -290,13 +290,13 @@ def hf_login(args: argparse.Namespace) -> int:
     else:
         token = sys.stdin.readline().strip()
     if not token:
-        raise TexturesError("no token given")
+        raise TxturesError("no token given")
     from huggingface_hub import HfApi
 
     try:
         name = HfApi().whoami(token=token)["name"]
     except Exception as error:
-        raise TexturesError(f"the hub rejected the token: {error}") from error
+        raise TxturesError(f"the hub rejected the token: {error}") from error
     path = environment.token_path(os.environ, Path.home())
     path.parent.mkdir(parents=True, exist_ok=True)
     staging = path.with_name(f".{path.name}.tmp")
@@ -323,14 +323,14 @@ def hf_whoami(args: argparse.Namespace) -> int:
     _settings(args, note=False)
     path = environment.token_path(os.environ, Path.home())
     if not path.is_file():
-        print("no token is saved; run `textures hf login`")
+        print("no token is saved; run `txtures hf login`")
         return 1
     from huggingface_hub import HfApi
 
     try:
         name = HfApi().whoami(token=path.read_text(encoding="utf-8").strip())["name"]
     except Exception as error:
-        raise TexturesError(f"the hub rejected the saved token: {error}") from error
+        raise TxturesError(f"the hub rejected the saved token: {error}") from error
     print(name)
     return 0
 
@@ -552,7 +552,7 @@ def run_command(args: argparse.Namespace) -> int:
     if settings.executor == "slurm" and not args.local:
         return _submit(args, settings, plan)
     if args.workers is not None:
-        raise TexturesError("--workers applies only to Slurm execution")
+        raise TxturesError("--workers applies only to Slurm execution")
     executor = api.local_executor(plan, settings, _progress)
     return _report_run(plan, executor, *run_request(plan, executor, args.modules))
 
@@ -563,7 +563,7 @@ def _submit(args: argparse.Namespace, settings: Settings, plan) -> int:
         return 0
     workers = args.workers if args.workers is not None else settings["slurm.workers"]
     if workers < 1:
-        raise TexturesError("--workers must be at least 1")
+        raise TxturesError("--workers must be at least 1")
     slurm = _slurm()
     existing = slurm_jobs.read_job(slurm_jobs.job_directory(settings.derivatives, plan))
     if existing is not None:
@@ -577,7 +577,7 @@ def _submit(args: argparse.Namespace, settings: Settings, plan) -> int:
     job = slurm_jobs.submit(plan, settings, args.modules, workers, slurm)
     noun = "task" if workers == 1 else "tasks"
     print(f"submitted job {job.job_id} ({workers} {noun}) to write {plan.table_directory}")
-    print(f"logs: {job.directory / 'logs'}; check progress with `textures status`")
+    print(f"logs: {job.directory / 'logs'}; check progress with `txtures status`")
     return 0
 
 
@@ -585,7 +585,7 @@ def worker_command(args: argparse.Namespace) -> int:
     """Run one task of a submitted job: compute its shard, then write the table."""
     job = slurm_jobs.read_job(args.directory)
     if job is None:
-        raise TexturesError(f"{args.directory} does not hold a submitted job")
+        raise TxturesError(f"{args.directory} does not hold a submitted job")
     request = job.request
     flags = {key: value for key, value in request["settings"].items()}
     flags["execution.executor"] = "local"
@@ -599,12 +599,12 @@ def worker_command(args: argparse.Namespace) -> int:
         request["modules"],
     )
     if plan.table_identity != job.table_identity:
-        raise TexturesError(
+        raise TxturesError(
             "the input, definitions, or resolved resources changed after this job was "
-            "submitted; run `textures run` again"
+            "submitted; run `txtures run` again"
         )
     if not 0 <= args.task < job.workers:
-        raise TexturesError(f"task {args.task} is outside the job's {job.workers} tasks")
+        raise TxturesError(f"task {args.task} is outside the job's {job.workers} tasks")
     items, resources = _stores(settings)
     executor = Executor(
         plan,
@@ -647,7 +647,7 @@ def _job_rows(settings: Settings, names) -> list[tuple[slurm_jobs.Job, dict[str,
         try:
             states = slurm.states(job.job_id)
             description = slurm_jobs.summarize(states)
-        except TexturesError as error:
+        except TxturesError as error:
             states, description = {}, f"state unavailable: {error}"
         rows.append((job, states, description))
     return rows
@@ -714,7 +714,7 @@ def gc_command(args: argparse.Namespace) -> int:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    """Run the textures command line and return its exit status."""
+    """Run the txtures command line and return its exit status."""
     parser = build_parser()
     args = parser.parse_args(argv)
     handler = getattr(args, "handler", None)
@@ -723,6 +723,6 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
     try:
         return handler(args)
-    except TexturesError as error:
-        print(f"textures: error: {error}", file=sys.stderr)
+    except TxturesError as error:
+        print(f"txtures: error: {error}", file=sys.stderr)
         return 1

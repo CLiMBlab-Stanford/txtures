@@ -31,8 +31,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from textures import __version__
-from textures.errors import TexturesError
+from txtures import __version__
+from txtures.errors import TxturesError
 
 MANIFEST = "manifest.json"
 LOCK_SUFFIX = ".lock"
@@ -121,7 +121,7 @@ class Heartbeat:
             self._paths.add(path)
             if self._thread is None:
                 self._thread = threading.Thread(
-                    target=self._run, name="textures-lock-heartbeat", daemon=True
+                    target=self._run, name="txtures-lock-heartbeat", daemon=True
                 )
                 self._thread.start()
 
@@ -270,11 +270,11 @@ class EntryStore:
         """Write an entry and publish it atomically. The caller should hold its lock.
 
         `write` fills a staging directory. The manifest, with `digest`,
-        `kind`, `created`, and `textures_version` added, is written last. If a
+        `kind`, `created`, and `txtures_version` added, is written last. If a
         valid entry already exists, the staged copy is discarded.
 
         Raises:
-            TexturesError: A different, invalid directory occupies the entry's path.
+            TxturesError: A different, invalid directory occupies the entry's path.
         """
         final = self.path(kind, digest)
         make_shared_dir(final.parent)
@@ -286,7 +286,7 @@ class EntryStore:
                 "digest": digest,
                 "kind": kind,
                 "created": now(),
-                "textures_version": __version__,
+                "txtures_version": __version__,
             }
             write_json(staging / MANIFEST, record)
             _share_tree(staging)
@@ -301,5 +301,5 @@ class EntryStore:
             shutil.rmtree(staging, ignore_errors=True)
             raise
         if self.get(kind, digest) is None:
-            raise TexturesError(f"failed to publish store entry {final}")
+            raise TxturesError(f"failed to publish store entry {final}")
         return final

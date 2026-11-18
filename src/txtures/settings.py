@@ -9,7 +9,7 @@ selects the store that holds them.
 
 Built-in defaults are directories in the home directory. A lab shares its
 stores by giving members the path of its definitions store, whose site
-settings name the rest; `textures site use PATH` records it in personal
+settings name the rest; `txtures site use PATH` records it in personal
 settings.
 """
 
@@ -22,8 +22,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
 
-from textures.errors import SettingsError
-from textures.yamlio import YamlError, load_mapping
+from txtures.errors import SettingsError
+from txtures.yamlio import YamlError, load_mapping
 
 SITE_DOCUMENT = Path("site") / "site.yml"
 """Location of the site settings document inside a definitions store."""
@@ -46,11 +46,11 @@ class SettingSpec:
 
 
 SPECS: tuple[SettingSpec, ...] = (
-    SettingSpec("definitions", "path", "the definitions store", "TEXTURES_DEFINITIONS"),
-    SettingSpec("inputs", "path", "directory of input files", "TEXTURES_INPUTS"),
-    SettingSpec("derivatives", "path", "directory of output tables", "TEXTURES_DERIVATIVES"),
-    SettingSpec("items", "path", "store of per-document results", "TEXTURES_ITEMS"),
-    SettingSpec("resources", "path", "models and the Hugging Face cache", "TEXTURES_RESOURCES"),
+    SettingSpec("definitions", "path", "the definitions store", "TXTURES_DEFINITIONS"),
+    SettingSpec("inputs", "path", "directory of input files", "TXTURES_INPUTS"),
+    SettingSpec("derivatives", "path", "directory of output tables", "TXTURES_DERIVATIVES"),
+    SettingSpec("items", "path", "store of per-document results", "TXTURES_ITEMS"),
+    SettingSpec("resources", "path", "models and the Hugging Face cache", "TXTURES_RESOURCES"),
     SettingSpec("execution.device", "text", "auto, cpu, cuda, cuda:N, or mps"),
     SettingSpec(
         "execution.executor", "choice", "local, or slurm to submit jobs", choices=("local", "slurm")
@@ -149,22 +149,22 @@ def personal_settings_path(env: Mapping[str, str], home: Path) -> Path:
     """Return the personal settings path, honoring `XDG_CONFIG_HOME`."""
     config_home = env.get("XDG_CONFIG_HOME")
     base = Path(config_home) if config_home else home / ".config"
-    return base / "textures" / "settings.yml"
+    return base / "txtures" / "settings.yml"
 
 
 def default_values(home: Path) -> dict[str, Any]:
     """Return built-in defaults: directories in the home directory.
 
-    `textures-definitions`, `textures-store`, and `textures-resources` are
+    `txtures-definitions`, `txtures-store`, and `txtures-resources` are
     siblings, apart from any code.
     """
-    store = home / "textures-store"
+    store = home / "txtures-store"
     return {
-        "definitions": home / "textures-definitions",
+        "definitions": home / "txtures-definitions",
         "inputs": store / "inputs",
         "derivatives": store / "derivatives",
         "items": store / "items",
-        "resources": home / "textures-resources",
+        "resources": home / "txtures-resources",
         "execution.device": "auto",
         "execution.executor": "local",
         "execution.max_variants": 64,
@@ -235,7 +235,7 @@ def _read_document(path: Path, *, allow_definitions: bool) -> dict[str, Any]:
         if spec.key == "definitions" and not allow_definitions:
             raise SettingsError(
                 f"{path}: 'definitions' cannot be set in site settings; set it with "
-                "--definitions, TEXTURES_DEFINITIONS, or personal settings"
+                "--definitions, TXTURES_DEFINITIONS, or personal settings"
             )
         values[key] = _coerce(spec, value, path.parent, str(path))
     return values
@@ -339,7 +339,7 @@ def _write_personal(path: Path, values: Mapping[str, Any]) -> None:
             target = target.setdefault(group, {})
         target[name] = value
     path.parent.mkdir(parents=True, exist_ok=True)
-    text = "# Personal textures settings, written by `textures site`.\n"
+    text = "# Personal txtures settings, written by `txtures site`.\n"
     if nested:
         text += yaml.safe_dump(nested, sort_keys=False, allow_unicode=True)
     descriptor, staging = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
@@ -374,7 +374,7 @@ def set_personal(
     cwd = Path.cwd() if cwd is None else cwd
     spec = SPEC_BY_KEY.get(key)
     if spec is None:
-        raise SettingsError(f"unknown setting {key!r}; see `textures site ls`")
+        raise SettingsError(f"unknown setting {key!r}; see `txtures site ls`")
     if spec.kind == "text_list":
         raw: Any = list(values)
     elif len(values) != 1:
@@ -402,7 +402,7 @@ def unset_personal(
     env = os.environ if env is None else env
     home = Path.home() if home is None else home
     if key not in SPEC_BY_KEY:
-        raise SettingsError(f"unknown setting {key!r}; see `textures site ls`")
+        raise SettingsError(f"unknown setting {key!r}; see `txtures site ls`")
     path = personal_settings_path(env, home)
     document = _personal_document(path)
     if key not in document:

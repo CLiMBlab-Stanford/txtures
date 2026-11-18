@@ -1,8 +1,8 @@
 """Planning, execution, and output tables."""
 
-from textures.engine.execution import Executor, VariantCounts
-from textures.engine.planning import Plan, PlannedVariant, item_status, plan_request
-from textures.engine.tables import (
+from txtures.engine.execution import Executor, VariantCounts
+from txtures.engine.planning import Plan, PlannedVariant, item_status, plan_request
+from txtures.engine.tables import (
     TableStatus,
     replanner,
     run_request,

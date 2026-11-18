@@ -1,7 +1,7 @@
 import pytest
 from conftest import write
 
-from textures.yamlio import YamlError, load_mapping
+from txtures.yamlio import YamlError, load_mapping
 
 
 def test_empty_file_reads_as_empty_mapping(tmp_path):

@@ -27,10 +27,10 @@ from typing import Literal, Self
 import numpy as np
 from pydantic import Field, model_validator
 
-from textures.corpus import Corpus, Document
-from textures.errors import TexturesError
-from textures.modules.base import Item, Module, ModuleConfig, RunContext
-from textures.modules.hf_model import HFModel, LanguageModel, is_local
+from txtures.corpus import Corpus, Document
+from txtures.errors import TxturesError
+from txtures.modules.base import Item, Module, ModuleConfig, RunContext
+from txtures.modules.hf_model import HFModel, LanguageModel, is_local
 
 LOGITS_BUDGET_BYTES = 1 << 30
 """Approximate size of the float32 log-probabilities computed in one forward batch."""
@@ -138,7 +138,7 @@ def score_sequences(
                 sequence = sequences[w.sequence]
                 kept = logits[row, w.own - w.start : w.stop - w.start].float()
                 if kept.shape[-1] != vocabulary:
-                    raise TexturesError(
+                    raise TxturesError(
                         f"model returned {kept.shape[-1]} logits per position, but its "
                         f"boundary set covers {vocabulary} token IDs"
                     )
@@ -216,17 +216,17 @@ class LMScores(Module):
         lm: LanguageModel = items[0].resources["model"]
         window = config.window or lm.max_length
         if window is None:
-            raise TexturesError(
+            raise TxturesError(
                 f"model {config.model} does not declare a maximum context length; set window"
             )
         if lm.max_length is not None and window > lm.max_length:
-            raise TexturesError(
+            raise TxturesError(
                 f"window {window} exceeds the maximum context length {lm.max_length} "
                 f"of model {config.model}"
             )
         stride = config.stride or max(1, window // 2)
         if stride >= window:
-            raise TexturesError(f"stride {stride} must be smaller than window {window}")
+            raise TxturesError(f"stride {stride} must be smaller than window {window}")
 
         sequences: list[list[int]] = []
         pieces: list[tuple[int, int, list[int], list[tuple[int, int]]]] = []

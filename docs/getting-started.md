@@ -8,29 +8,29 @@ From a checkout on Linux or macOS:
 ./install
 ```
 
-The script downloads a pinned uv and Python, installs textures with the
-locked dependencies into `textures-install/` in the checkout, and puts a
-`textures` command in `~/.local/bin`. It does not use or change any Python,
+The script downloads a pinned uv and Python, installs txtures with the
+locked dependencies into `txtures-install/` in the checkout, and puts a
+`txtures` command in `~/.local/bin`. It does not use or change any Python,
 conda environment, or uv configuration already on the machine. Add
 `--compute cpu` on a machine without an NVIDIA GPU. [Settings](settings.md#installation)
 lists every option.
 
-If your lab shares a definitions store, point textures at it once:
+If your lab shares a definitions store, point txtures at it once:
 
 ```bash
-textures site use /path/to/textures-definitions
+txtures site use /path/to/txtures-definitions
 ```
 
 Its site settings then choose the shared locations, so you reuse models and
-results that others have computed. Without one, textures keeps everything in
+results that others have computed. Without one, txtures keeps everything in
 your home directory and says so with a note. Check the result:
 
 ```bash
-textures site ls
+txtures site ls
 ```
 
 This lists every setting, its value, and where the value came from. The
-locations that matter first are `inputs`, where textures reads your files,
+locations that matter first are `inputs`, where txtures reads your files,
 and `derivatives`, where it writes output tables.
 
 ## Compute surprisal
@@ -46,12 +46,12 @@ Saved as `gardenpath.txt`, it is the input `gardenpath`. Check it, then see
 what a run would do:
 
 ```console
-$ textures inputs check gardenpath
+$ txtures inputs check gardenpath
 gardenpath: plain-text
   documents: 2
   regions: 14
   digest: 96ce0d0d8e50662523ccaeddbb31b4540d30f3c4be74f6dc3027551d8b9adfde
-$ textures plan gardenpath
+$ txtures plan gardenpath
 input gardenpath: plain-text, 2 documents, 14 regions
 workflow main
 table .../derivatives/gardenpath/main-68ce5fbefa0d (to be written)
@@ -68,7 +68,7 @@ The packaged `main` workflow scores text with GPT-2 and reports surprisal in
 bits with word-boundary correction. Run it:
 
 ```console
-$ textures run gardenpath
+$ txtures run gardenpath
 building resource hf_model 81d9ad54cbc5
 lm_scores [main]: computing 2 of 2 items
 lm_scores [main]: 2 computed, 0 reused
@@ -94,7 +94,7 @@ Models and other scientific parameters live in a definitions store, not on
 the command line. Create one, then add a config and a workflow that uses it:
 
 ```bash
-textures def init
+txtures def init
 ```
 
 ```yaml
@@ -111,8 +111,8 @@ lm_scores: pythia410m
 ```
 
 ```bash
-textures def validate
-textures run gardenpath --workflow pythia
+txtures def validate
+txtures run gardenpath --workflow pythia
 ```
 
 Pin `revision` to a commit hash so that later runs use the same weights.
@@ -122,7 +122,7 @@ several models in one table.
 ## From Python
 
 ```python
-import textures as tx
+import txtures as tx
 
 table = tx.compute(
     "surprisal",

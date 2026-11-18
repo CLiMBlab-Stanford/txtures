@@ -4,8 +4,8 @@ from pathlib import Path
 import pytest
 from conftest import write
 
-import textures
-from textures.cli import main
+import txtures
+from txtures.cli import main
 
 
 @pytest.fixture(autouse=True)
@@ -14,20 +14,20 @@ def isolated_settings(monkeypatch, tmp_path):
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "home" / ".config"))
     for name in ("DEFINITIONS", "INPUTS", "DERIVATIVES", "ITEMS", "RESOURCES"):
-        monkeypatch.delenv(f"TEXTURES_{name}", raising=False)
-    monkeypatch.setenv("TEXTURES_DEFINITIONS", str(tmp_path / "defs"))
+        monkeypatch.delenv(f"TXTURES_{name}", raising=False)
+    monkeypatch.setenv("TXTURES_DEFINITIONS", str(tmp_path / "defs"))
 
 
 def test_version_flag_reports_package_version(capsys):
     with pytest.raises(SystemExit) as excinfo:
         main(["--version"])
     assert excinfo.value.code == 0
-    assert capsys.readouterr().out.strip() == f"textures {textures.__version__}"
+    assert capsys.readouterr().out.strip() == f"txtures {txtures.__version__}"
 
 
 def test_no_arguments_prints_help(capsys):
     assert main([]) == 0
-    assert "usage: textures" in capsys.readouterr().out
+    assert "usage: txtures" in capsys.readouterr().out
 
 
 def test_site_ls_reports_values_sources_and_meanings(capsys, tmp_path):
@@ -41,10 +41,10 @@ def test_site_ls_reports_values_sources_and_meanings(capsys, tmp_path):
         "source": "command line",
         "description": "store of per-document results",
     }
-    assert rows["definitions"]["source"] == "environment (TEXTURES_DEFINITIONS)"
+    assert rows["definitions"]["source"] == "environment (TXTURES_DEFINITIONS)"
     assert rows["resources"] == {
         "key": "resources",
-        "value": str(tmp_path / "home" / "textures-resources"),
+        "value": str(tmp_path / "home" / "txtures-resources"),
         "source": "default",
         "description": "models and the Hugging Face cache",
     }
@@ -54,7 +54,7 @@ def test_site_ls_reports_values_sources_and_meanings(capsys, tmp_path):
 
 
 def test_site_set_unset_and_use(capsys, tmp_path, monkeypatch):
-    personal = tmp_path / "home" / ".config" / "textures" / "settings.yml"
+    personal = tmp_path / "home" / ".config" / "txtures" / "settings.yml"
     assert main(["site", "set", "slurm.partition", "gpu"]) == 0
     assert main(["site", "set", "slurm.options", "--", "--exclude=n1", "--qos=low"]) == 0
     assert main(["site", "set", "items", "rel/items"]) == 0
@@ -65,7 +65,7 @@ def test_site_set_unset_and_use(capsys, tmp_path, monkeypatch):
     assert main(["site", "set", "slurm.gpus", "-1"]) == 1
     assert "non-negative integer" in capsys.readouterr().err
     assert main(["site", "set", "colour", "blue"]) == 1
-    assert "see `textures site ls`" in capsys.readouterr().err
+    assert "see `txtures site ls`" in capsys.readouterr().err
 
     assert main(["site", "unset", "slurm.partition"]) == 0
     assert "slurm.partition is now (unset) (default)" in capsys.readouterr().out
@@ -73,9 +73,9 @@ def test_site_set_unset_and_use(capsys, tmp_path, monkeypatch):
 
     # The environment outranks personal settings, and the command says so.
     assert main(["site", "set", "definitions", str(tmp_path)]) == 0
-    assert "TEXTURES_DEFINITIONS" in capsys.readouterr().err
+    assert "TXTURES_DEFINITIONS" in capsys.readouterr().err
 
-    monkeypatch.delenv("TEXTURES_DEFINITIONS")
+    monkeypatch.delenv("TXTURES_DEFINITIONS")
     assert main(["site", "unset", "items"]) == 0
     store = tmp_path / "lab-definitions"
     write(store / "site" / "site.yml", f"items: {tmp_path / 'lab' / 'items'}\n")
@@ -86,14 +86,14 @@ def test_site_set_unset_and_use(capsys, tmp_path, monkeypatch):
 
 
 def test_default_locations_draw_one_note(capsys, monkeypatch, tmp_path):
-    from textures import cli
+    from txtures import cli
 
-    monkeypatch.delenv("TEXTURES_DEFINITIONS")
+    monkeypatch.delenv("TXTURES_DEFINITIONS")
     monkeypatch.setattr(cli, "_noted", False)
-    (tmp_path / "home" / "textures-store" / "inputs").mkdir(parents=True)
+    (tmp_path / "home" / "txtures-store" / "inputs").mkdir(parents=True)
     assert main(["status"]) == 0
     err = capsys.readouterr().err
-    assert err.count("textures site use") == 1
+    assert err.count("txtures site use") == 1
     assert main(["site", "set", "items", str(tmp_path / "items")]) == 0
     monkeypatch.setattr(cli, "_noted", False)
     assert main(["status"]) == 0
@@ -125,7 +125,7 @@ def test_def_validate_uses_the_stores_variant_limit(capsys, tmp_path):
 
 def test_errors_are_reported_without_tracebacks(capsys):
     assert main(["def", "validate"]) == 1
-    assert "textures: error: definitions store" in capsys.readouterr().err
+    assert "txtures: error: definitions store" in capsys.readouterr().err
 
 
 def test_inputs_list_reports_valid_invalid_and_ignored(capsys, tmp_path):
@@ -166,15 +166,15 @@ def fake_engine(monkeypatch, tmp_path):
     """Run CLI engine commands against the stand-in modules in temporary stores."""
     import fake_modules
 
-    from textures import api
-    from textures.definitions import Definitions
+    from txtures import api
+    from txtures.definitions import Definitions
 
     fake_modules.reset()
     monkeypatch.setattr(
         api, "load_definitions", lambda settings: Definitions.packaged(fake_modules.registry())
     )
     for key in ("inputs", "derivatives", "resources", "items"):
-        monkeypatch.setenv(f"TEXTURES_{key.upper()}", str(tmp_path / key))
+        monkeypatch.setenv(f"TXTURES_{key.upper()}", str(tmp_path / key))
     write(tmp_path / "inputs" / "doc.txt", "The horse raced.\nIt fell.\n")
     yield tmp_path
     fake_modules.reset()

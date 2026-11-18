@@ -3,13 +3,25 @@ requires = ["setuptools>=64"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "textures"
+name = "txtures"
 version = "0.1.0"
 description = "Word- and region-level features of text for psycholinguistic research"
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
 requires-python = ">=3.12"
+authors = [{ name = "Cory Shain" }]
+keywords = ["psycholinguistics", "surprisal", "language models", "reading times"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Operating System :: MacOS",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering",
+    "Topic :: Text Processing :: Linguistic",
+]
 dependencies = [
     "huggingface-hub>=1,<3",
     "numpy>=1.26,<3",
@@ -28,8 +40,13 @@ cpu = ["torch>=2.4,<3"]
 [dependency-groups]
 dev = ["pytest>=8,<10", "ruff>=0.12,<1"]
 
+[project.urls]
+Documentation = "https://txtures.readthedocs.io"
+Repository = "https://github.com/CLiMBlab-Stanford/txtures"
+Issues = "https://github.com/CLiMBlab-Stanford/txtures/issues"
+
 [project.scripts]
-textures = "textures.cli:main"
+txtures = "txtures.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

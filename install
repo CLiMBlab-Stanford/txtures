@@ -1,5 +1,5 @@
 #!/bin/sh
-# Install textures from this checkout into a self-contained prefix.
+# Install txtures from this checkout into a self-contained prefix.
 #
 # The installation uses a pinned uv, a uv-managed CPython, and the locked
 # dependencies in uv.lock. It does not use or change any Python, conda
@@ -16,18 +16,18 @@ usage() {
 Usage: ./install [options]
 
 Options:
-  --prefix DIR        install into DIR (default: CHECKOUT/textures-install)
+  --prefix DIR        install into DIR (default: CHECKOUT/txtures-install)
   --compute KIND      PyTorch build: cuda or cpu (default: cuda on Linux,
                       cpu on macOS; later runs keep the recorded choice)
   --site DIR          use the definitions store DIR, whose site settings
                       name shared locations; recorded in your personal
-                      settings, as `textures site use DIR` does
+                      settings, as `txtures site use DIR` does
   --resources DIR     record DIR as this installation's directory of models
                       and other resources (later runs keep it)
   --executor KIND     record where computation runs: local or slurm
-  --bin-dir DIR       where to put the textures command (default: ~/.local/bin)
-  --no-launcher       do not create the textures command in --bin-dir
-  --default           make this installation the one the textures command runs
+  --bin-dir DIR       where to put the txtures command (default: ~/.local/bin)
+  --no-launcher       do not create the txtures command in --bin-dir
+  --default           make this installation the one the txtures command runs
   --dev               also install the development tools (pytest, ruff)
   -h, --help          show this help
 EOF
@@ -43,7 +43,7 @@ while [ -L "$script" ]; do
 done
 checkout=$(CDPATH= cd "$(dirname "$script")" && pwd -P)
 
-prefix=$checkout/textures-install
+prefix=$checkout/txtures-install
 compute=
 resources=
 executor=
@@ -193,4 +193,4 @@ if [ -n "$executor" ]; then set -- "$@" --executor "$executor"; fi
 if [ -n "$site" ]; then set -- "$@" --site "$site"; fi
 if [ "$launcher" = true ]; then set -- "$@" --bin-dir "$bin_dir"; fi
 if [ "$make_default" = true ]; then set -- "$@" --default; fi
-"$prefix/env/bin/python" -I -m textures.installation configure "$@"
+"$prefix/env/bin/python" -I -m txtures.installation configure "$@"

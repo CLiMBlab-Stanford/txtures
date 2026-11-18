@@ -7,10 +7,10 @@ from typing import Any
 
 import yaml
 
-from textures.errors import TexturesError
+from txtures.errors import TxturesError
 
 
-class YamlError(TexturesError):
+class YamlError(TxturesError):
     """A YAML document cannot be read as a mapping."""
 
 

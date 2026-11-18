@@ -11,9 +11,9 @@ DEFINITIONS/
 └── workflows/ID.yml       workflows
 ```
 
-`textures def init [PATH]` creates a store with an example config and
-workflow. `textures def validate [PATH]` checks every file in it, including
-definitions no workflow uses. Without a store, textures uses its packaged
+`txtures def init [PATH]` creates a store with an example config and
+workflow. `txtures def validate [PATH]` checks every file in it, including
+definitions no workflow uses. Without a store, txtures uses its packaged
 definitions alone.
 
 ## Configs
@@ -58,7 +58,7 @@ The workflow alone decides which config each module uses. Configs never name
 other configs, so here `surprisal` keeps its `main` config and reads the
 `lm_scores` results computed under `pythia410m`.
 
-`textures run NAME --workflow ID` uses a workflow. `--module` (`-m`), which
+`txtures run NAME --workflow ID` uses a workflow. `--module` (`-m`), which
 can be repeated, limits the table to some feature modules; modules they
 depend on still run but add no columns.
 
@@ -95,7 +95,7 @@ extends: main
 lm_scores: [gpt2, pythia410m]
 ```
 
-`textures plan` reports how many variants each module has. A request that
+`txtures plan` reports how many variants each module has. A request that
 expands past `execution.max_variants` (default 64) is refused until the
 setting is raised.
 

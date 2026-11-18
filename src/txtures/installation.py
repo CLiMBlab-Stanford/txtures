@@ -1,13 +1,13 @@
 """Installation records and launchers written by `./install`.
 
-An installation lives under one prefix, `CHECKOUT/textures-install/` by
+An installation lives under one prefix, `CHECKOUT/txtures-install/` by
 default:
 
 - `uv/`: the pinned uv binary;
 - `python/`: the uv-managed CPython interpreter;
 - `uv-cache/`: uv's download and build cache;
-- `env/`: the environment, with textures installed from the checkout;
-- `bin/textures`: the launcher, which runs the environment's interpreter in
+- `env/`: the environment, with txtures installed from the checkout;
+- `bin/txtures`: the launcher, which runs the environment's interpreter in
   isolated mode;
 - `install.json`: the choices made at installation, including any settings
   the installation fixes (`resources` and `execution.executor`, when given).
@@ -28,13 +28,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from textures import __version__
-from textures.errors import SettingsError
-from textures.settings import set_personal
+from txtures import __version__
+from txtures.errors import SettingsError
+from txtures.settings import set_personal
 
 RECORD = "install.json"
 RECORD_VERSION = 1
-LAUNCHER_MARKER = "# textures launcher written by ./install"
+LAUNCHER_MARKER = "# txtures launcher written by ./install"
 COMPUTE = ("cuda", "cpu")
 EXECUTORS = ("local", "slurm")
 
@@ -95,7 +95,7 @@ def _quote(path: Path) -> str:
 
 def launcher_text(target: Path, python: bool) -> str:
     """Text of a launcher that runs `target`: an interpreter, or another launcher."""
-    command = f"{_quote(target)} -I -m textures" if python else _quote(target)
+    command = f"{_quote(target)} -I -m txtures" if python else _quote(target)
     return (
         f'#!/bin/sh\n{LAUNCHER_MARKER}; rerun ./install instead of editing.\nexec {command} "$@"\n'
     )
@@ -110,20 +110,20 @@ def _write_executable(path: Path, text: str) -> None:
 
 
 def install_user_launcher(bin_dir: Path, target: Path, make_default: bool) -> str:
-    """Point `bin_dir/textures` at an installation's launcher, if that is safe.
+    """Point `bin_dir/txtures` at an installation's launcher, if that is safe.
 
-    A missing command is created. A textures launcher for another
+    A missing command is created. A txtures launcher for another
     installation is replaced only when `make_default` is set. Any other file
     is left alone. Returns a message describing what happened.
     """
-    path = bin_dir / "textures"
+    path = bin_dir / "txtures"
     text = launcher_text(target, python=False)
     if path.is_symlink() or (path.exists() and not path.is_file()):
-        return f"left {path} unchanged: it is not a textures launcher"
+        return f"left {path} unchanged: it is not a txtures launcher"
     if path.exists():
         existing = path.read_text(encoding="utf-8", errors="replace")
         if LAUNCHER_MARKER not in existing:
-            return f"left {path} unchanged: it is not a textures launcher"
+            return f"left {path} unchanged: it is not a txtures launcher"
         if existing == text:
             return f"{path} already runs this installation"
         if not make_default:
@@ -155,7 +155,7 @@ def configure(
     The record fixes only the settings given here or in an earlier run;
     other settings resolve as they would without an installation. `site`, a
     definitions store, is written to the user's personal settings, as
-    `textures site use` does. Returns the installation and messages to print.
+    `txtures site use` does. Returns the installation and messages to print.
 
     Raises:
         SettingsError: A choice is invalid, or `site` is not a directory.
@@ -180,7 +180,7 @@ def configure(
         "environment": str(environment),
         "compute": compute,
         "settings": settings,
-        "textures_version": __version__,
+        "txtures_version": __version__,
         "python_version": platform.python_version(),
         "uv_version": uv_version,
     }
@@ -188,9 +188,9 @@ def configure(
     staging.write_text(json.dumps(record, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     os.replace(staging, prefix / RECORD)
 
-    launcher = prefix / "bin" / "textures"
+    launcher = prefix / "bin" / "txtures"
     _write_executable(launcher, launcher_text(environment / "bin" / "python", python=True))
-    messages = [f"installed textures {__version__} ({compute}) in {prefix}"]
+    messages = [f"installed txtures {__version__} ({compute}) in {prefix}"]
     messages += [f"  {key}: {value}" for key, value in sorted(settings.items())]
     if bin_dir is not None:
         messages.append(install_user_launcher(bin_dir, launcher, make_default))
@@ -203,7 +203,7 @@ def configure(
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog="python -m textures.installation")
+    parser = argparse.ArgumentParser(prog="python -m txtures.installation")
     commands = parser.add_subparsers(dest="command", required=True)
     setup = commands.add_parser("configure", help="write the installation record and launchers")
     setup.add_argument("--prefix", type=Path, required=True)
@@ -229,7 +229,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             site=args.site,
         )
     except SettingsError as error:
-        print(f"textures: error: {error}", file=sys.stderr)
+        print(f"txtures: error: {error}", file=sys.stderr)
         return 1
     print("\n".join(messages))
     return 0

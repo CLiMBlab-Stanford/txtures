@@ -26,12 +26,12 @@ from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
-from textures import __version__
-from textures.definitions import Definitions
-from textures.engine.execution import Executor
-from textures.engine.planning import Plan, PlannedVariant, plan_request
-from textures.errors import TexturesError
-from textures.store import MANIFEST, lock, make_shared_dir, now, read_json, write_json
+from txtures import __version__
+from txtures.definitions import Definitions
+from txtures.engine.execution import Executor
+from txtures.engine.planning import Plan, PlannedVariant, plan_request
+from txtures.errors import TxturesError
+from txtures.store import MANIFEST, lock, make_shared_dir, now, read_json, write_json
 
 if TYPE_CHECKING:
     import pandas as pd
@@ -47,7 +47,7 @@ def format_value(value: Any) -> str:
     own precision.
 
     Raises:
-        TexturesError: A text value contains a tab or line break.
+        TxturesError: A text value contains a tab or line break.
     """
     if value is None:
         return "NA"
@@ -63,7 +63,7 @@ def format_value(value: Any) -> str:
         return str(int(value))
     text = str(value)
     if any(char in text for char in "\t\n\r"):
-        raise TexturesError(f"value {text!r} contains a tab or line break")
+        raise TxturesError(f"value {text!r} contains a tab or line break")
     return text
 
 
@@ -104,7 +104,7 @@ def table_manifest(plan: Plan, modules: Sequence[str] | None) -> dict[str, Any]:
         ],
         "variants": {planned.identity: _variant_record(planned) for planned in plan.variants},
         "notes": list(plan.notes),
-        "textures_version": __version__,
+        "txtures_version": __version__,
         "created": now(),
     }
 
@@ -140,7 +140,7 @@ def table_rows(plan: Plan, executor: Executor) -> Iterator[list[Any]]:
     with the input.
 
     Raises:
-        TexturesError: A module returned columns of the wrong length or omitted
+        TxturesError: A module returned columns of the wrong length or omitted
             a feature.
     """
     corpus = plan.corpus
@@ -176,7 +176,7 @@ def write_table(plan: Plan, executor: Executor, modules: Sequence[str] | None) -
     """Assemble the plan's output table from results and publish it atomically.
 
     Raises:
-        TexturesError: A module returned columns of the wrong length or omitted
+        TxturesError: A module returned columns of the wrong length or omitted
             a feature.
     """
     corpus = plan.corpus
@@ -242,7 +242,7 @@ def _parse_feature(values: pd.Series) -> pd.Series:
 
 
 def read_table(path: Path | str) -> pd.DataFrame:
-    """Read an output table written by textures, keeping its values exact.
+    """Read an output table written by txtures, keeping its values exact.
 
     `path` is a table directory or its `NAME.tsv` file. Location and metadata
     columns are read as text, so a region such as `NA` or `null` stays a
@@ -250,17 +250,17 @@ def read_table(path: Path | str) -> pd.DataFrame:
     missing and `Inf` as infinite.
 
     Raises:
-        TexturesError: `path` is not an output table.
+        TxturesError: `path` is not an output table.
     """
     path = Path(path)
     if path.is_dir():
         tables = [p for p in path.glob("*.tsv") if not p.name.endswith(COLUMNS_SUFFIX)]
         if len(tables) != 1:
-            raise TexturesError(f"{path} is not an output table directory")
+            raise TxturesError(f"{path} is not an output table directory")
         path = tables[0]
     columns_file = path.with_name(path.name.removesuffix(".tsv") + COLUMNS_SUFFIX)
     if not path.is_file() or not columns_file.is_file():
-        raise TexturesError(f"{path} is not an output table: {columns_file.name} is missing")
+        raise TxturesError(f"{path} is not an output table: {columns_file.name} is missing")
     import pandas as pd
 
     options = {"sep": "\t", "dtype": str, "keep_default_na": False, "quoting": 3}
@@ -291,9 +291,9 @@ def _document_columns(document, column_variants, executor: Executor) -> list[Seq
             )
         values = by_variant[planned.identity].get(column.feature)
         if values is None:
-            raise TexturesError(f"module {planned.name} did not return feature {column.feature!r}")
+            raise TxturesError(f"module {planned.name} did not return feature {column.feature!r}")
         if len(values) != len(document.regions):
-            raise TexturesError(
+            raise TxturesError(
                 f"module {planned.name} returned {len(values)} {column.feature} values for "
                 f"document {document.doc_id!r}, which has {len(document.regions)} regions"
             )
@@ -347,7 +347,7 @@ def table_statuses(
                 continue
             try:
                 plan = replan(*request)
-            except TexturesError as error:
+            except TxturesError as error:
                 reason = str(error).splitlines()[0] if str(error) else type(error).__name__
                 statuses.append(TableStatus(directory, "stale", f"cannot replan: {reason}"))
                 continue

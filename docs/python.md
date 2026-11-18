@@ -1,12 +1,12 @@
 # Python API
 
 ```python
-import textures as tx
+import txtures as tx
 ```
 
 The API runs the same modules, stores, and settings as the command line.
 It always computes in the calling process, even when `execution.executor` is
-`slurm`; submit jobs with `textures run`.
+`slurm`; submit jobs with `txtures run`.
 
 ## `tx.compute`
 
@@ -52,7 +52,7 @@ Configs come from one of two places:
   The definitions store is not read, so the call alone determines the
   result. Modules not named use their defaults.
 - Without `config`, the definitions store's workflow (`workflow`, default
-  `main`) chooses the configs, as for `textures run`.
+  `main`) chooses the configs, as for `txtures run`.
 
 Giving both `config` and `workflow` is an error.
 
@@ -63,7 +63,7 @@ table = tx.run("gardenpath", workflow="pythia", modules=["surprisal"])
 ```
 
 `tx.run(name, workflow="main", modules=None)` is
-`textures run NAME --workflow WORKFLOW --module ...`. It computes what is
+`txtures run NAME --workflow WORKFLOW --module ...`. It computes what is
 missing, writes the output table to the derivatives directory unless it is
 current, and returns the table as read by `tx.read_table`.
 
@@ -87,16 +87,16 @@ each progress message, so `progress=print` shows what a long call is doing.
 
 Planning notes, such as an unpinned model revision, and input warnings are
 issued as Python warnings. Invalid input, definitions, or settings raise
-`textures.errors.TexturesError` or one of its subclasses. `InputError` and
+`txtures.errors.TxturesError` or one of its subclasses. `InputError` and
 `DefinitionError` list every problem in their `problems` attribute.
 
 ## Settings and the environment
 
 The API reads the same settings as the command line, including your personal
-settings, so `textures site use` configures both. Software that depends on
-textures can instead pass locations as arguments or set the `TEXTURES_*`
+settings, so `txtures site use` configures both. Software that depends on
+txtures can instead pass locations as arguments or set the `TXTURES_*`
 environment variables. When every shared location comes from built-in
-defaults, the first call issues a `textures.api.DefaultLocationsWarning`.
+defaults, the first call issues a `txtures.api.DefaultLocationsWarning`.
 
 The API does not change the process environment. It passes its Hugging Face
 cache and your saved token to the Hugging Face libraries directly, so a host

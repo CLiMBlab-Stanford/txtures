@@ -2,7 +2,7 @@
 
 An input is one file in the inputs directory, named by its basename:
 `stimuli.tsv` is the input `stimuli`. Names must match
-`[A-Za-z0-9_][A-Za-z0-9_.-]*`, and two files may not share one. textures
+`[A-Za-z0-9_][A-Za-z0-9_.-]*`, and two files may not share one. txtures
 never writes to the inputs directory.
 
 Each input is divided into documents, and each document into regions.
@@ -76,8 +76,8 @@ may be refused by `surprisal` for some tokenizers (see
 ## Checks
 
 ```bash
-textures inputs list           # every input, its size, and whether it is valid
-textures inputs check NAME     # every problem in one input
+txtures inputs list           # every input, its size, and whether it is valid
+txtures inputs check NAME     # every problem in one input
 ```
 
 Every run reads its input the same way and refuses an invalid one. Problems

@@ -6,7 +6,7 @@ with, computes its shard of the missing items and then any items left over,
 and writes the table if no other task has. The first task to finish writes
 it; the others find it current.
 
-A job directory, `DERIVATIVES/.textures-jobs/NAME/WORKFLOW-DIGEST12/`, holds:
+A job directory, `DERIVATIVES/.txtures-jobs/NAME/WORKFLOW-DIGEST12/`, holds:
 
 - `request.json`: the settings, request, and table identity the tasks use;
 - `job.sh`: the batch script;
@@ -26,12 +26,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from textures.engine.planning import Plan
-from textures.errors import TexturesError
-from textures.settings import Settings
-from textures.store import make_shared_dir, now, read_json, write_json
+from txtures.engine.planning import Plan
+from txtures.errors import TxturesError
+from txtures.settings import Settings
+from txtures.store import make_shared_dir, now, read_json, write_json
 
-JOBS_DIRECTORY = ".textures-jobs"
+JOBS_DIRECTORY = ".txtures-jobs"
 ACTIVE_STATES = frozenset(
     {"PENDING", "RUNNING", "CONFIGURING", "COMPLETING", "REQUEUED", "RESIZING", "SUSPENDED"}
 )
@@ -65,18 +65,18 @@ def job_directory(derivatives: Path, plan: Plan) -> Path:
 
 
 class Slurm:
-    """The Slurm commands textures uses. `run` is replaceable for testing."""
+    """The Slurm commands txtures uses. `run` is replaceable for testing."""
 
     def __init__(self, run: Runner = subprocess.run):
         self._run = run
 
     def _call(self, command: list[str]) -> str:
         if self._run is subprocess.run and shutil.which(command[0]) is None:
-            raise TexturesError(f"{command[0]} is not available; Slurm execution needs it")
+            raise TxturesError(f"{command[0]} is not available; Slurm execution needs it")
         result = self._run(command, capture_output=True, text=True)
         if result.returncode != 0:
             message = (result.stderr or result.stdout).strip()
-            raise TexturesError(f"{shlex.join(command)} failed: {message}")
+            raise TxturesError(f"{shlex.join(command)} failed: {message}")
         return result.stdout
 
     def submit(self, script: Path) -> str:
@@ -93,7 +93,7 @@ class Slurm:
         try:
             output = self._call(["sacct", "-n", "-P", "-X", "-j", job_id, "-o", "JobID,State"])
             separator = "|"
-        except TexturesError:
+        except TxturesError:
             output = self._call(["squeue", "-h", "-r", "-j", job_id, "-o", "%i %T"])
             separator = " "
         states = {}
@@ -119,11 +119,11 @@ def batch_script(
 ) -> str:
     """The batch script for a request's job array."""
     if not slurm.get("partition"):
-        raise TexturesError(
+        raise TxturesError(
             "Slurm execution needs slurm.partition; set it in site or personal settings"
         )
     options = [
-        f"--job-name=textures-{name}",
+        f"--job-name=txtures-{name}",
         f"--output={directory / 'logs' / '%A_%a.out'}",
         f"--array=0-{workers - 1}",
         f"--partition={slurm['partition']}",
@@ -183,7 +183,7 @@ def submit(
     """Submit a request as a job array of `workers` tasks.
 
     Raises:
-        TexturesError: Slurm settings are incomplete or `sbatch` failed.
+        TxturesError: Slurm settings are incomplete or `sbatch` failed.
     """
     directory = job_directory(settings.derivatives, plan)
     make_shared_dir(directory / "logs")
@@ -200,7 +200,7 @@ def submit(
         "created": now(),
     }
     write_json(directory / "request.json", request)
-    command = [sys.executable, "-I", "-m", "textures", "worker", str(directory)]
+    command = [sys.executable, "-I", "-m", "txtures", "worker", str(directory)]
     script = directory / "job.sh"
     script.write_text(
         batch_script(directory, plan.input_name, workers, settings.group("slurm"), command),

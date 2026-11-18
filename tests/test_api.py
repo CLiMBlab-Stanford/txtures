@@ -8,10 +8,10 @@ from conftest import write
 from fake_modules import CALLS
 from test_cli import fake_engine, isolated_settings  # noqa: F401 - fixtures
 
-import textures as tx
-from textures import api
-from textures.errors import DefinitionError, InputError, TexturesError
-from textures.inputs import InputSettings, read_texts
+import txtures as tx
+from txtures import api
+from txtures.errors import DefinitionError, InputError, TxturesError
+from txtures.inputs import InputSettings, read_texts
 
 pytestmark = pytest.mark.filterwarnings("ignore:.*revision is not pinned:UserWarning")
 
@@ -103,7 +103,7 @@ def test_compute_rejects_invalid_configs(fake_api):
 
 
 def test_compute_uses_the_store_workflow_without_config(fake_api, monkeypatch):
-    from textures.definitions import Definitions
+    from txtures.definitions import Definitions
 
     store = fake_api / "store"
     write(store / "configs" / "fake_scores" / "big.yml", "scale: 5\n")
@@ -145,7 +145,7 @@ def test_read_table_keeps_text_and_parses_features(tmp_path):
     assert table["s"][0] == 1.5 and math.isnan(table["s"][1]) and table["s"][2] == -np.inf
     assert list(table["flag"].astype(object).fillna("missing")) == [True, "missing", False]
     assert tx.read_table(directory / "x.tsv").equals(table)
-    with pytest.raises(TexturesError, match="not an output table"):
+    with pytest.raises(TxturesError, match="not an output table"):
         tx.read_table(tmp_path)
 
 
@@ -161,10 +161,10 @@ def test_the_api_leaves_the_process_environment_alone(fake_api, monkeypatch):
 
 def test_default_locations_warn_once(fake_api, monkeypatch):
     for key in ("ITEMS", "RESOURCES"):
-        monkeypatch.delenv(f"TEXTURES_{key}")
-    monkeypatch.delenv("TEXTURES_DEFINITIONS")
+        monkeypatch.delenv(f"TXTURES_{key}")
+    monkeypatch.delenv("TXTURES_DEFINITIONS")
     monkeypatch.setattr(api, "_warned_defaults", False)
-    with pytest.warns(api.DefaultLocationsWarning, match="textures site use"):
+    with pytest.warns(api.DefaultLocationsWarning, match="txtures site use"):
         tx.compute("fake_feature", "a b")
     import warnings
 

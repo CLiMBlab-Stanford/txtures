@@ -25,8 +25,8 @@ from typing import Any
 
 import numpy as np
 
-from textures.errors import TexturesError
-from textures.modules.base import Resource, RunContext
+from txtures.errors import TxturesError
+from txtures.modules.base import Resource, RunContext
 
 COMMIT_HASH = re.compile(r"[0-9a-f]{40}")
 BOUNDARY_FILE = "boundary.npy"
@@ -42,7 +42,7 @@ def is_local(model: str) -> bool:
 def directory_digest(directory: Path) -> str:
     """Digest of every file under `directory`: relative paths and contents."""
     if not directory.is_dir():
-        raise TexturesError(f"model directory {directory} does not exist")
+        raise TxturesError(f"model directory {directory} does not exist")
     hasher = hashlib.sha256()
     for path in sorted(p for p in directory.rglob("*") if p.is_file()):
         hasher.update(path.relative_to(directory).as_posix().encode() + b"\0")
@@ -62,7 +62,7 @@ def resolve_revision(
     cannot be reached, the hash recorded in the local cache is used.
 
     Raises:
-        TexturesError: The repository or revision does not exist, or the hub
+        TxturesError: The repository or revision does not exist, or the hub
             cannot be reached and the cache does not record the revision.
     """
     if revision is not None and COMMIT_HASH.fullmatch(revision):
@@ -77,21 +77,21 @@ def resolve_revision(
     try:
         info = HfApi().model_info(model, revision=revision, token=token)
         if info.sha is None:
-            raise TexturesError(f"the hub reports no commit for model {model!r}")
+            raise TxturesError(f"the hub reports no commit for model {model!r}")
         return info.sha
     except GatedRepoError as error:
-        raise TexturesError(f"model {model!r} is gated; log in with `textures hf login`") from error
+        raise TxturesError(f"model {model!r} is gated; log in with `txtures hf login`") from error
     except RevisionNotFoundError as error:
-        raise TexturesError(f"model {model!r} has no revision {revision!r}") from error
+        raise TxturesError(f"model {model!r} has no revision {revision!r}") from error
     except RepositoryNotFoundError as error:
-        raise TexturesError(f"model {model!r} was not found on the Hugging Face hub") from error
+        raise TxturesError(f"model {model!r} was not found on the Hugging Face hub") from error
     except Exception as hub_error:  # network failures and offline mode
         try:
             path = snapshot_download(
                 model, revision=revision, cache_dir=cache, local_files_only=True
             )
         except Exception:
-            raise TexturesError(
+            raise TxturesError(
                 f"cannot resolve the revision of model {model!r}: the hub could not be "
                 f"reached ({type(hub_error).__name__}) and the cache does not record it"
             ) from hub_error
@@ -122,9 +122,9 @@ def _tokenizer(model: str, revision: str, cache: Path | None, token: str | None)
     try:
         tokenizer = AutoTokenizer.from_pretrained(**_source(resolved, cache, token))
     except Exception as error:
-        raise TexturesError(f"cannot load the tokenizer of model {model!r}: {error}") from error
+        raise TxturesError(f"cannot load the tokenizer of model {model!r}: {error}") from error
     if not getattr(tokenizer, "is_fast", True):
-        raise TexturesError(f"model {model!r} has no fast tokenizer, which character spans need")
+        raise TxturesError(f"model {model!r} has no fast tokenizer, which character spans need")
     return tokenizer
 
 
@@ -173,7 +173,7 @@ def start_ids(tokenizer, document_start: str) -> list[int]:
         return []
     token = tokenizer.bos_token_id if document_start == "bos" else tokenizer.eos_token_id
     if token is None:
-        raise TexturesError(f"the tokenizer has no {document_start.upper()} token")
+        raise TxturesError(f"the tokenizer has no {document_start.upper()} token")
     return [token]
 
 
@@ -267,7 +267,7 @@ class HFModel(Resource):
         revision = self.spec.get("revision")
         if is_local(model):
             if revision is not None:
-                raise TexturesError("revision cannot be set for a local model directory")
+                raise TxturesError("revision cannot be set for a local model directory")
             revision = "sha256:" + directory_digest(Path(model))
         else:
             revision = resolve_revision(model, revision, context.hf_cache, context.hf_token)
@@ -277,7 +277,7 @@ class HFModel(Resource):
         if choice == "auto":
             choice = auto_document_start(tokenizer)
             if choice is None:
-                raise TexturesError(
+                raise TxturesError(
                     f"model {model!r} declares neither a BOS nor an EOS token, so no token "
                     "can mark a document start; set document_start: none to score it "
                     "without one (its first word then has no surprisal)"
@@ -296,7 +296,7 @@ class HFModel(Resource):
                 **_source(resolved, context.hf_cache, context.hf_token)
             )
         except Exception as error:
-            raise TexturesError(
+            raise TxturesError(
                 f"cannot load the config of model {resolved['model']!r}: {error}"
             ) from error
         size = int(getattr(config, "vocab_size", 0) or 0) or len(tokenizer)
@@ -330,7 +330,7 @@ class HFModel(Resource):
                 dtype=getattr(torch, resolved["dtype"]),
             )
         except Exception as error:
-            raise TexturesError(f"cannot load model {resolved['model']!r}: {error}") from error
+            raise TxturesError(f"cannot load model {resolved['model']!r}: {error}") from error
         model.to(target)
         model.eval()
         return LanguageModel(

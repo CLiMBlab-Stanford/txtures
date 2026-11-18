@@ -3,8 +3,8 @@ from pathlib import Path
 import pytest
 from conftest import write
 
-from textures.errors import SettingsError
-from textures.settings import (
+from txtures.errors import SettingsError
+from txtures.settings import (
     resolve_settings,
     set_personal,
     unset_personal,
@@ -25,12 +25,12 @@ def resolve(home, flags=None, env=None, cwd=None):
 
 def test_defaults_are_in_the_home_directory(home):
     settings = resolve(home)
-    assert settings.definitions == home / "textures-definitions"
-    assert settings.inputs == home / "textures-store" / "inputs"
-    assert settings.items == home / "textures-store" / "items"
-    assert settings.resources == home / "textures-resources"
-    assert settings.resource_store == home / "textures-resources" / "store"
-    assert settings.hf_cache == home / "textures-resources" / "huggingface" / "hub"
+    assert settings.definitions == home / "txtures-definitions"
+    assert settings.inputs == home / "txtures-store" / "inputs"
+    assert settings.items == home / "txtures-store" / "items"
+    assert settings.resources == home / "txtures-resources"
+    assert settings.resource_store == home / "txtures-resources" / "store"
+    assert settings.hf_cache == home / "txtures-resources" / "huggingface" / "hub"
     assert settings.executor == "local"
     assert settings.max_variants == 64
     assert all(setting.source == "default" for setting in settings.values.values())
@@ -38,34 +38,34 @@ def test_defaults_are_in_the_home_directory(home):
 
 def test_shared_locations_are_flagged_only_when_all_are_defaults(home):
     assert uses_default_locations(resolve(home))
-    assert not uses_default_locations(resolve(home, env={"TEXTURES_ITEMS": "/shared/items"}))
+    assert not uses_default_locations(resolve(home, env={"TXTURES_ITEMS": "/shared/items"}))
 
 
 def test_precedence_flag_env_personal_site_default(home, tmp_path):
     store = tmp_path / "store"
     write(store / "site" / "site.yml", "inputs: site-inputs\nitems: site-items\nresources: r\n")
     write(
-        home / ".config" / "textures" / "settings.yml",
+        home / ".config" / "txtures" / "settings.yml",
         f"definitions: {store}\ninputs: personal-inputs\nitems: personal-items\n",
     )
     settings = resolve(
         home,
         flags={"inputs": "/flag/inputs"},
-        env={"TEXTURES_INPUTS": "/env/inputs", "TEXTURES_ITEMS": "/env/items"},
+        env={"TXTURES_INPUTS": "/env/inputs", "TXTURES_ITEMS": "/env/items"},
     )
     assert settings.inputs == Path("/flag/inputs")
     assert settings.values["inputs"].source == "command line"
     assert settings.items == Path("/env/items")
-    assert settings.values["items"].source == "environment (TEXTURES_ITEMS)"
+    assert settings.values["items"].source == "environment (TXTURES_ITEMS)"
     assert settings.definitions == store
     assert settings.values["definitions"].source.startswith("personal settings")
     assert settings.resources == store / "site" / "r"
     assert settings.values["resources"].source.startswith("site settings")
-    assert settings.derivatives == home / "textures-store" / "derivatives"
+    assert settings.derivatives == home / "txtures-store" / "derivatives"
 
 
 def test_relative_paths_resolve_against_their_source(home, tmp_path):
-    personal = write(home / ".config" / "textures" / "settings.yml", "items: cache/items\n")
+    personal = write(home / ".config" / "txtures" / "settings.yml", "items: cache/items\n")
     cwd = tmp_path / "work"
     settings = resolve(home, flags={"inputs": "texts"}, cwd=cwd)
     assert settings.inputs == cwd / "texts"
@@ -74,7 +74,7 @@ def test_relative_paths_resolve_against_their_source(home, tmp_path):
 
 def test_xdg_config_home_locates_personal_settings(home, tmp_path):
     xdg = tmp_path / "xdg"
-    write(xdg / "textures" / "settings.yml", "inputs: /xdg/inputs\n")
+    write(xdg / "txtures" / "settings.yml", "inputs: /xdg/inputs\n")
     settings = resolve(home, env={"XDG_CONFIG_HOME": str(xdg)})
     assert settings.inputs == Path("/xdg/inputs")
 
@@ -82,7 +82,7 @@ def test_xdg_config_home_locates_personal_settings(home, tmp_path):
 def test_nested_execution_settings_merge_by_key(home, tmp_path):
     store = tmp_path / "store"
     write(store / "site" / "site.yml", "execution:\n  device: cuda\n  max_variants: 8\n")
-    write(home / ".config" / "textures" / "settings.yml", "execution:\n  device: cpu\n")
+    write(home / ".config" / "txtures" / "settings.yml", "execution:\n  device: cpu\n")
     settings = resolve(home, flags={"definitions": str(store)})
     assert settings.device == "cpu"
     assert settings.max_variants == 8
@@ -107,13 +107,13 @@ def test_site_settings_cannot_choose_the_definitions_store(home, tmp_path):
     ],
 )
 def test_invalid_settings_documents_are_rejected(home, text, message):
-    write(home / ".config" / "textures" / "settings.yml", text)
+    write(home / ".config" / "txtures" / "settings.yml", text)
     with pytest.raises(SettingsError, match=message):
         resolve(home)
 
 
 def test_installation_overrides_personal_and_site_but_not_env(home, tmp_path):
-    write(home / ".config" / "textures" / "settings.yml", "resources: /personal/res\n")
+    write(home / ".config" / "txtures" / "settings.yml", "resources: /personal/res\n")
     installed = {"resources": "/installed/res", "execution.executor": "slurm"}
     settings = resolve_settings(
         env={}, home=home, installation=installed, installation_source="inst"
@@ -122,7 +122,7 @@ def test_installation_overrides_personal_and_site_but_not_env(home, tmp_path):
     assert settings.values["resources"].source == "inst"
     assert settings.executor == "slurm"
     settings = resolve_settings(
-        env={"TEXTURES_RESOURCES": "/env/res"}, home=home, installation=installed
+        env={"TXTURES_RESOURCES": "/env/res"}, home=home, installation=installed
     )
     assert settings.resources == Path("/env/res")
 
@@ -159,4 +159,4 @@ def test_set_personal_writes_nested_yaml_that_resolves_back(home, tmp_path):
 def test_set_personal_rejects_invalid_values(home, key, values, message):
     with pytest.raises(SettingsError, match=message):
         set_personal(key, values, env={}, home=home)
-    assert not (home / ".config" / "textures" / "settings.yml").exists()
+    assert not (home / ".config" / "txtures" / "settings.yml").exists()

@@ -12,10 +12,10 @@ import numpy as np
 import pytest
 import torch
 
-from textures.corpus import Document
-from textures.errors import TexturesError
-from textures.modules import Item, RunContext
-from textures.modules.hf_model import (
+from txtures.corpus import Document
+from txtures.errors import TxturesError
+from txtures.modules import Item, RunContext
+from txtures.modules.hf_model import (
     HFModel,
     auto_document_start,
     boundaries_detected,
@@ -23,8 +23,8 @@ from textures.modules.hf_model import (
     load_tokenizer,
     resolve_revision,
 )
-from textures.modules.lm_scores import LMScores, LMScoresConfig
-from textures.modules.surprisal import Surprisal, SurprisalConfig, region_tokens
+from txtures.modules.lm_scores import LMScores, LMScoresConfig
+from txtures.modules.surprisal import Surprisal, SurprisalConfig, region_tokens
 
 pytestmark = pytest.mark.integration
 
@@ -72,10 +72,10 @@ def test_tokenizer_matrix(model, expected_start):
         starts, ends = np.array([a for a, _ in spans]), np.array([b for _, b in spans])
         if model in MERGES_NEWLINES and "\n" in text:
             # These tokenizers join punctuation with a following newline
-            # (".\n"), so a token spans two regions; textures refuses rather
+            # (".\n"), so a token spans two regions; txtures refuses rather
             # than misattribute it. Inputs contain newlines only when a
             # sidecar sets a newline joiner.
-            with pytest.raises(TexturesError, match="spans more than one region"):
+            with pytest.raises(TxturesError, match="spans more than one region"):
                 region_tokens(doc, starts, ends)
             continue
         ranges = region_tokens(doc, starts, ends)
@@ -220,7 +220,7 @@ def test_gpt2_golden_values(tmp_path):
 def test_compute_through_the_api_matches_golden_values(tmp_path, monkeypatch):
     from huggingface_hub import constants
 
-    import textures as tx
+    import txtures as tx
 
     # Share the Hugging Face cache the other tests use, so GPT-2 is not
     # downloaded again into the temporary resources directory.
@@ -231,7 +231,7 @@ def test_compute_through_the_api_matches_golden_values(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "home" / ".config"))
     for key in ("definitions", "inputs", "derivatives", "items", "resources"):
-        monkeypatch.setenv(f"TEXTURES_{key.upper()}", str(tmp_path / key))
+        monkeypatch.setenv(f"TXTURES_{key.upper()}", str(tmp_path / key))
 
     config = {"lm_scores": {"model": "gpt2", "revision": GPT2_REVISION}}
     table = tx.compute("surprisal", list(GOLDEN), config=config, device="cpu")

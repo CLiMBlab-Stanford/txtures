@@ -1,6 +1,6 @@
 # Output tables
 
-`textures run NAME` writes one table directory for the request:
+`txtures run NAME` writes one table directory for the request:
 
 ```text
 DERIVATIVES/NAME/WORKFLOW-DIGEST12/
@@ -48,12 +48,12 @@ table$surprisal <- as.numeric(table$surprisal)
 `NAME.columns.tsv` lists each feature column with its module, feature,
 labels such as `lm_scores.model=gpt2`, and variant identity. `manifest.json`
 records the table's identity, the request, the full resolved config and
-resources of every variant, notes from planning, and the textures version.
+resources of every variant, notes from planning, and the txtures version.
 Use these files, not column names, to find the parameters behind a column.
 
 ## What is current
 
-textures decides what to compute from identities, never from modification
+txtures decides what to compute from identities, never from modification
 times. A run that finds its table already written with the same identity
 does nothing. Otherwise it computes only the missing results and writes the
 table again.
@@ -61,8 +61,8 @@ table again.
 Tables are views over stored results, so deleting one loses no computation.
 
 ```bash
-textures status [NAME ...]    # each table: current, stale, or broken
-textures gc [--dry-run]       # remove stale and broken tables
+txtures status [NAME ...]    # each table: current, stale, or broken
+txtures gc [--dry-run]       # remove stale and broken tables
 ```
 
 `status` replans the request each table records. A table is current when

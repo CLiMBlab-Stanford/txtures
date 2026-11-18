@@ -3,11 +3,11 @@ from typing import Literal
 import pytest
 from conftest import write
 
-from textures.definitions import Definitions
-from textures.definitions.resolution import derive_label
-from textures.errors import DefinitionError
-from textures.modules import Module, ModuleConfig, Registry
-from textures.modules.lm_scores import LMScoresConfig
+from txtures.definitions import Definitions
+from txtures.definitions.resolution import derive_label
+from txtures.errors import DefinitionError
+from txtures.modules import Module, ModuleConfig, Registry
+from txtures.modules.lm_scores import LMScoresConfig
 
 
 def problems(error: pytest.ExceptionInfo[DefinitionError]) -> str:

@@ -1,4 +1,4 @@
-"""Exceptions that textures reports to users."""
+"""Exceptions that txtures reports to users."""
 
 from __future__ import annotations
 
@@ -6,11 +6,11 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 
 
-class TexturesError(Exception):
+class TxturesError(Exception):
     """An error caused by user input, definitions, or settings rather than a bug."""
 
 
-class SettingsError(TexturesError):
+class SettingsError(TxturesError):
     """A settings document or setting value is invalid."""
 
 
@@ -25,7 +25,7 @@ class Problem:
         return f"{self.location}: {self.message}"
 
 
-class ProblemError(TexturesError):
+class ProblemError(TxturesError):
     """One or more validation problems.
 
     `problems` lists every failure found, so callers can report them together.

@@ -1,14 +1,14 @@
-"""The process environment that textures controls, and Hugging Face access.
+"""The process environment that txtures controls, and Hugging Face access.
 
-Libraries that textures uses read configuration from environment variables:
+Libraries that txtures uses read configuration from environment variables:
 Hugging Face libraries choose caches, tokens, and offline behavior from
 `HF_*`, `HUGGINGFACE_*`, and `TRANSFORMERS_*` variables. In processes that
-textures owns (the `textures` command and Slurm tasks), `apply` removes any
+txtures owns (the `txtures` command and Slurm tasks), `apply` removes any
 such variables they inherit and sets its own, so results and cache locations
 do not depend on the caller's shell. `apply` must run before the Hugging Face
 libraries are imported, because they read these variables at import time.
 
-The Python API leaves the environment of its host process alone. textures
+The Python API leaves the environment of its host process alone. txtures
 does not need it: `run_context` passes the cache and the token to the
 Hugging Face libraries directly.
 """
@@ -19,8 +19,8 @@ import os
 from collections.abc import MutableMapping
 from pathlib import Path
 
-from textures.modules import RunContext
-from textures.settings import Settings, personal_settings_path
+from txtures.modules import RunContext
+from txtures.settings import Settings, personal_settings_path
 
 MANAGED_PREFIXES = ("HF_", "HUGGINGFACE_", "TRANSFORMERS_")
 
@@ -36,7 +36,7 @@ def token_path(env: MutableMapping[str, str], home: Path) -> Path:
 def saved_token(
     env: MutableMapping[str, str] | None = None, home: Path | None = None
 ) -> str | None:
-    """Return the token saved by `textures hf login`, or `None` if there is none."""
+    """Return the token saved by `txtures hf login`, or `None` if there is none."""
     env = os.environ if env is None else env
     home = Path.home() if home is None else home
     try:
