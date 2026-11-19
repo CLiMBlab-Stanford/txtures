@@ -75,7 +75,10 @@ SPECS: tuple[SettingSpec, ...] = (
     SettingSpec("resources", "path", "models and the Hugging Face cache", location=True),
     SettingSpec("execution.device", "text", "auto, cpu, cuda, cuda:N, or mps"),
     SettingSpec(
-        "execution.executor", "choice", "local, or slurm to submit jobs", choices=("local", "slurm")
+        "execution.executor",
+        "choice",
+        "auto submits intensive work to Slurm when it is set up; local or slurm always",
+        choices=("local", "slurm", "auto"),
     ),
     SettingSpec("execution.max_variants", "positive_int", "most variants one module may expand to"),
     SettingSpec("slurm.partition", "text", "partition to submit to; required for slurm"),
@@ -206,7 +209,7 @@ def default_values() -> dict[str, Any]:
     """Return the built-in defaults of the settings that are not locations."""
     return {
         "execution.device": "auto",
-        "execution.executor": "local",
+        "execution.executor": "auto",
         "execution.max_variants": 64,
         "slurm.partition": None,
         "slurm.account": None,

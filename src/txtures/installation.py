@@ -10,16 +10,20 @@ default:
 - `bin/txtures`: the launcher, which runs the environment's interpreter in
   isolated mode;
 - `install.json`: facts about the installation: its checkout, environment,
-  PyTorch build, and versions. It holds no settings; those live in the
-  site (see `txtures.settings`).
+  PyTorch build, whether it has the development tools, where `./install`
+  put the `txtures` command, and versions. It holds no settings; those live
+  in the site (see `txtures.settings`).
 
 `./install` bootstraps uv and the environment and then runs this module's
-`configure` command with the environment's interpreter.
+`configure` command with the environment's interpreter. `txtures install`
+runs the checkout's `./install` again with the choices in the record (see
+`reinstall_arguments`).
 """
 
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import os
 import platform
@@ -56,6 +60,12 @@ class Installation:
     @property
     def source(self) -> str:
         return f"installation ({self.prefix / RECORD})"
+
+    @property
+    def dev(self) -> bool | None:
+        """Whether the development tools were installed, or `None` if the record predates `dev`."""
+        value = self.record.get("dev")
+        return None if value is None else bool(value)
 
 
 def read(prefix: Path) -> Installation | None:
@@ -105,7 +115,8 @@ def stale_message(installation: Installation) -> str:
     return (
         f"{installation.prefix / RECORD} sets {', '.join(installation.settings)}, but "
         "installations no longer hold settings; every setting lives in the txtures home. "
-        f"Run `./install` again to remove them; to keep them, {keep_advice(installation.settings)}."
+        f"Run `txtures install` to remove them; to keep them, "
+        f"{keep_advice(installation.settings)}."
     )
 
 
@@ -118,6 +129,40 @@ def current() -> Installation | None:
     if installation is None or Path(installation.record.get("environment", "")) != environment:
         return None
     return installation
+
+
+def reinstall_arguments(
+    installation: Installation,
+    *,
+    upgrade: bool = False,
+    compute: str | None = None,
+    dev: bool | None = None,
+    make_default: bool = False,
+) -> list[str]:
+    """The `./install` arguments that rebuild `installation` with the same choices.
+
+    The prefix, the PyTorch build, the development tools, and the directory
+    of the `txtures` command are kept unless `compute` or `dev` changes
+    them. Records from before 0.5.0 do not say whether the development tools
+    were installed; this process's environment is checked for pytest
+    instead. They also do not say where the `txtures` command went, so
+    `./install` uses its default there.
+    """
+    if dev is None:
+        dev = installation.dev
+    if dev is None:
+        dev = importlib.util.find_spec("pytest") is not None
+    arguments = ["--upgrade"] if upgrade else []
+    arguments += ["--prefix", str(installation.prefix)]
+    arguments += ["--compute", compute or installation.compute]
+    if dev:
+        arguments.append("--dev")
+    if "bin_dir" in installation.record:
+        bin_dir = installation.record["bin_dir"]
+        arguments += ["--no-launcher"] if bin_dir is None else ["--bin-dir", str(bin_dir)]
+    if make_default:
+        arguments.append("--default")
+    return arguments
 
 
 def _quote(path: Path) -> str:
@@ -159,8 +204,8 @@ def install_user_launcher(bin_dir: Path, target: Path, make_default: bool) -> st
             return f"{path} already runs this installation"
         if not make_default:
             return (
-                f"left {path} pointing at another installation; "
-                "rerun ./install with --default to make this one the default"
+                f"left {path} pointing at another installation; to make this one the "
+                f"default, run `{target} install --default`"
             )
     _write_executable(path, text)
     message = f"{path} now runs this installation"
@@ -178,10 +223,13 @@ def configure(
     make_default: bool = False,
     uv_version: str = "",
     site: Path | None = None,
+    dev: bool = False,
 ) -> tuple[Installation, list[str]]:
     """Write the installation record and launchers.
 
-    The record holds no settings. One written by an earlier version that did
+    `dev` records whether `./install` installed the development tools, and
+    `bin_dir` where it put the `txtures` command, or `None` for no command,
+    so that `txtures install` can keep both. The record holds no settings. One written by an earlier version that did
     is rewritten without them, and a message names them. `site`, a
     txtures home, is chosen as the user's site, as `txtures site use` does. Returns the installation and messages to print.
 
@@ -203,6 +251,8 @@ def configure(
         "checkout": str(checkout),
         "environment": str(environment),
         "compute": compute,
+        "dev": dev,
+        "bin_dir": None if bin_dir is None else str(bin_dir),
         "txtures_version": __version__,
         "python_version": platform.python_version(),
         "uv_version": uv_version,
@@ -245,6 +295,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     setup.add_argument("--default", action="store_true", dest="make_default")
     setup.add_argument("--uv-version", default="")
     setup.add_argument("--site", type=Path)
+    setup.add_argument("--dev", action="store_true")
     args = parser.parse_args(argv)
     try:
         _, messages = configure(
@@ -255,6 +306,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             make_default=args.make_default,
             uv_version=args.uv_version,
             site=args.site,
+            dev=args.dev,
         )
     except SettingsError as error:
         print(f"txtures: error: {error}", file=sys.stderr)

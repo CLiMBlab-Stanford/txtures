@@ -182,6 +182,7 @@ class LMScores(Module):
         "context": ("context",),
     }
     batch_size = 8
+    intensive = True
 
     def resources(self, config: LMScoresConfig):
         return {

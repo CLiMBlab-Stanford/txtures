@@ -235,4 +235,5 @@ set -- --prefix "$prefix" --checkout "$checkout" --compute "$compute" --uv-versi
 if [ -n "$site" ]; then set -- "$@" --site "$site"; fi
 if [ "$launcher" = true ]; then set -- "$@" --bin-dir "$bin_dir"; fi
 if [ "$make_default" = true ]; then set -- "$@" --default; fi
+if [ "$dev" = true ]; then set -- "$@" --dev; fi
 "$prefix/env/bin/python" -I -m txtures.installation configure "$@"

@@ -26,11 +26,15 @@ changing any Python already on the machine. It puts a `txtures` command in
 - `--prefix DIR` installs somewhere other than the checkout.
 - `--upgrade` first updates the checkout to the newest release.
 
-On a Slurm cluster, `txtures site set execution.executor=slurm
-slurm.partition=NAME` makes `txtures run` submit its computation as a job
-and return at once (`slurm.account`, `slurm.gpus`, and others are optional).
-Follow the job with `txtures status`. `tx.compute` and `tx.run` in Python
-submit the same job and wait for its results.
+Later, `txtures install --upgrade` moves an installation to the newest
+release with the same choices, and `txtures install` reinstalls it.
+
+On a Slurm cluster, `txtures site set slurm.partition=NAME` makes
+`txtures run` submit work that runs language models as a job and return at
+once (`slurm.account`, `slurm.gpus`, and others are optional). Follow the
+job with `txtures status`. `tx.compute` and `tx.run` in Python submit the
+same job and wait for its results. Pass `--local` or `local=True` to compute
+here instead.
 
 Run `./install --help` for every option and `txtures site ls` to see the
 resulting settings. For gated models, run `txtures hf login` once.

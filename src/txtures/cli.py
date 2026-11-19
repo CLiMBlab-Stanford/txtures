@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shlex
 import shutil
 import sys
 import warnings
@@ -223,6 +224,34 @@ def build_parser() -> argparse.ArgumentParser:
     gc = commands.add_parser("gc", help="remove stale and broken output tables and finished jobs")
     gc.add_argument("--dry-run", action="store_true", help="list what would be removed")
     gc.set_defaults(handler=gc_command)
+
+    install = commands.add_parser(
+        "install",
+        help="update this installation from its checkout, keeping its choices",
+        description="Run the checkout's ./install again for this installation. The prefix, "
+        "PyTorch build, development tools, and txtures command location recorded by the "
+        "last install are kept unless an option changes them. First-time installations "
+        "use ./install in a checkout.",
+    )
+    install.add_argument(
+        "--upgrade",
+        action="store_true",
+        help="first update the checkout to the newest release (see ./install --help)",
+    )
+    install.add_argument("--compute", choices=installation.COMPUTE, help="switch the PyTorch build")
+    install.add_argument(
+        "--dev",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="add or remove the development tools",
+    )
+    install.add_argument(
+        "--default",
+        action="store_true",
+        dest="make_default",
+        help="make the txtures command run this installation",
+    )
+    install.set_defaults(handler=install_command)
 
     hf = commands.add_parser("hf", help="manage your Hugging Face token for gated models")
     hf_commands = hf.add_subparsers(dest="hf_command", metavar="COMMAND", required=True)
@@ -788,16 +817,13 @@ def run_command(args: argparse.Namespace) -> int:
     settings, plan = _plan(args)
     for note in plan.notes:
         print(f"note: {note}", file=sys.stderr)
-    if slurm_jobs.submits(settings, args.local):
-        return _submit(args, settings, plan)
-    if settings.executor == "slurm" and not args.local:
-        print(
-            "note: computing here: this command runs inside a txtures Slurm task, "
-            "which never submits further jobs",
-            file=sys.stderr,
-        )
-    elif args.workers is not None:
+    if args.workers is not None and (args.local or settings.executor == "local"):
         raise TxturesError("--workers applies only to Slurm execution")
+    decision = slurm_jobs.decide(settings, args.local, plan, _stores(settings)[0])
+    if decision.note:
+        print(f"note: {decision.note}", file=sys.stderr)
+    if decision.submit:
+        return _submit(args, settings, plan)
     executor = api.local_executor(plan, settings, _progress)
     return _report_run(plan, executor, *run_request(plan, executor, args.modules))
 
@@ -942,6 +968,40 @@ def status_command(args: argparse.Namespace) -> int:
         where = f"{job.request['input']}/{job.directory.name}"
         print(f"job {job.job_id}  {where}: {description}  (logs: {job.directory / 'logs'})")
     return 0
+
+
+def install_command(args: argparse.Namespace) -> int:
+    """Replace this process with the checkout's `./install`, run with the recorded choices.
+
+    Settings are not resolved, so this works even while they are invalid or
+    left where earlier versions kept them.
+    """
+    installed = installation.current()
+    if installed is None:
+        raise TxturesError(
+            "this txtures was not installed by ./install, so `txtures install` cannot update "
+            "it; update it with the tool that installed it, such as pip or uv"
+        )
+    script = installed.checkout / "install"
+    if not os.access(script, os.X_OK):
+        raise TxturesError(
+            f"{script} is missing; the checkout that {installed.prefix} was installed from "
+            "has moved or was removed"
+        )
+    command = [
+        str(script),
+        *installation.reinstall_arguments(
+            installed,
+            upgrade=args.upgrade,
+            compute=args.compute,
+            dev=args.dev,
+            make_default=args.make_default,
+        ),
+    ]
+    print(f"running {shlex.join(command)}", flush=True)
+    sys.stderr.flush()
+    os.execv(script, command)
+    return 0  # not reached
 
 
 def gc_command(args: argparse.Namespace) -> int:

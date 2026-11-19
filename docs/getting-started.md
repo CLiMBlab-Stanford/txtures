@@ -13,7 +13,8 @@ locked dependencies into `txtures-install/` in the checkout, and puts a
 `txtures` command in `~/.local/bin`. It does not use or change any Python,
 conda environment, or uv configuration already on the machine. Add
 `--compute cpu` on a machine without an NVIDIA GPU. [Settings](settings.md#installation)
-lists every option.
+lists every option. Later, `txtures install --upgrade` moves the installation
+to the newest release with the same options.
 
 Everything txtures keeps lives in one directory, the txtures home: its
 definitions, inputs, output tables, cache of computed results, and models.
