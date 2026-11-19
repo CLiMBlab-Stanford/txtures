@@ -1,9 +1,11 @@
 # Slurm
 
 When `execution.executor` is `slurm`, `txtures run` submits its computation
-as a Slurm job array and returns once the job is queued. Choose it in your
-site with `txtures site set execution.executor=slurm`; `txtures run --local`
-then computes one request here instead.
+as a Slurm job array and returns once the job is queued. `tx.compute` and
+`tx.run` in Python submit the same kind of job and wait for it to end (see
+[From Python](#from-python)). Choose Slurm in your site with
+`txtures site set execution.executor=slurm`; `txtures run --local` then
+computes one request here instead.
 
 ## Settings
 
@@ -54,6 +56,23 @@ another task or a later run computes them.
 Each task checks that the input, definitions, and resolved model revisions
 are unchanged since submission, and fails without computing if they are not.
 Run `txtures run` again to submit the new request.
+
+Tasks never submit jobs of their own. Each task sets `TXTURES_TASK`, which
+every process it starts inherits. Where that variable is set, `txtures run`
+and the Python API compute in the same process and say so.
+
+## From Python
+
+`tx.compute` and `tx.run` submit a job when anything is missing, then block
+until it ends. Interrupting the call, for example with Ctrl-C, cancels a
+job it submitted. `workers=N` and `local=True` match `--workers` and `--local`; see
+[Python API](python.md#slurm).
+
+For `tx.compute`, the job directory is
+`OUTPUTS/.txtures-jobs/tx.compute/WORKFLOW-DIGEST12/`. It also holds
+`texts.json`, the text and configs that the tasks read. These tasks store
+results in the cache but write no table. The waiting call builds the table
+itself.
 
 ## Following a job
 

@@ -5,8 +5,8 @@ import txtures as tx
 ```
 
 The API runs the same modules, stores, and settings as the command line.
-It always computes in the calling process, even when `execution.executor` is
-`slurm`; submit jobs with `txtures run`.
+When `execution.executor` is `slurm`, `tx.compute` and `tx.run` submit a
+Slurm job and wait for it (see [Slurm](#slurm)).
 
 ## `tx.compute`
 
@@ -78,11 +78,48 @@ table = tx.read_table("outputs/gardenpath/main-68ce5fbefa0d")
 stays a string. Feature columns, as listed in `NAME.columns.tsv`, become
 numbers, with `NA` read as NaN and `Inf` as infinity, or Booleans.
 
+## Slurm
+
+When the site's `execution.executor` is `slurm`, `tx.compute` and `tx.run`
+compute what is missing with a Slurm job and block until it ends. They then
+return the same table a local call would. If nothing is missing, nothing is
+submitted.
+
+```python
+table = tx.compute("surprisal", texts, config=config, workers=4)
+```
+
+```text
+submitted job 81234 (4 tasks); logs: .../outputs/.txtures-jobs/tx.compute/main-3f9a0c1d2e4b/logs
+job 81234: 4 PENDING
+job 81234: 4 RUNNING
+job 81234: 4 COMPLETED
+```
+
+- `workers` sets the number of array tasks (default `slurm.workers`), and
+  `local=True` computes in the calling process instead.
+- `tx.compute` writes its text and configs to the job directory, so the
+  tasks can read them. They must therefore be JSON values: strings,
+  numbers, lists, and dictionaries. The tasks store their results in the
+  cache, and the call builds the table from there.
+- If a job for the same request is already pending or running, the call
+  waits for that job instead of submitting another.
+- Interrupting the call, for example with Ctrl-C, cancels the job it
+  submitted. Results that tasks already stored stay in the cache. A job the
+  call only waited for keeps running.
+- If the job ends without computing everything, the call raises
+  `TxturesError` and names the log directory.
+
+Without `progress`, these job messages go to standard error. [Slurm](slurm.md)
+describes the settings, how tasks share work, and what compute nodes need
+to reach.
+
 ## Common options
 
 `tx.compute` and `tx.run` accept keyword arguments that override settings for
 one call: `home`, `definitions`, `cache`, `resources`, and `device`, and
-for `tx.run` also `inputs` and `outputs`. `progress`, if given, is called with
+for `tx.run` also `inputs` and `outputs`. `local` and `workers` choose how
+the call computes (see [Slurm](#slurm)). `progress`, if given, is called with
 each progress message, so `progress=print` shows what a long call is doing.
 
 Planning notes, such as an unpinned model revision, and input warnings are
