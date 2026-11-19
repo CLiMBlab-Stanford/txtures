@@ -4,113 +4,175 @@ Settings choose where txtures reads and writes and how it computes. They
 never change computed values; anything that does is a config parameter (see
 [Definitions](definitions.md)).
 
-## Changing settings
+## The txtures home
 
-```bash
-txtures site ls                        # every setting: value, source, and meaning
-txtures site use /path/to/definitions  # use a lab's definitions store
-txtures site set slurm.partition gpu   # set one setting
-txtures site unset slurm.partition     # remove it again
+Everything txtures keeps lives in one directory, the txtures home, which is
+also your site:
+
+```text
+HOME/
+├── site.yml       site settings: execution and Slurm limits
+├── definitions/   configs and workflows (see Definitions)
+├── inputs/        input files
+├── outputs/       output tables
+├── cache/         computed per-document results, reused by every run
+└── resources/     models and the Hugging Face cache
 ```
 
-`use`, `set`, and `unset` edit your personal settings file (see below),
-which every txtures you run reads, however it was installed. `use` sets
-`definitions`, and the store's `site/site.yml` then supplies the lab's other
-locations. `set` makes relative paths absolute. A list setting takes several
-values, given after `--` when they start with a dash:
-`txtures site set slurm.options -- --exclude=node1`. When a higher-priority
-source overrides what was written, the command says so. `site ls --json`
-prints the same listing as JSON, and `site show` is another name for `ls`.
+```bash
+txtures site init /path/to/txtures-home   # create a home
+txtures site use /path/to/txtures-home    # choose your home
+txtures site ls                           # every setting: value, source, and meaning
+```
 
-When `definitions`, `items`, and `resources` all come from built-in
-defaults, txtures shares no results with anyone, which on a lab machine is
-usually an oversight. The command line then prints a note, and the Python API
-issues a `DefaultLocationsWarning`, once per process. Setting any of the three
-in any way silences it.
+`site init` creates the layout with an example config and workflow, and
+makes the home a Git repository unless given `--no-git`. Git tracks
+`site.yml` and `definitions/`, and the `.gitignore` it writes leaves out
+the data directories, so a lab's changes to its settings and definitions
+can be reviewed and undone. The repository is shared with the group when
+the parent directory is group-writable; `site init` makes no commit.
+Without a path, it creates the home in use, by default `~/txtures-home`.
 
-## Settings and sources
+`site use` records the home's path in your home-path file,
+`$XDG_CONFIG_HOME/txtures/home-path`, by default
+`~/.config/txtures/home-path`, a plain text file holding only that path.
+Every use of txtures reads it: the command line, the Python API, and every
+installation or program that depends on txtures, so one `site use`
+configures all of them.
+
+The layout is fixed, so a home's settings never move its directories. To
+keep a directory elsewhere, such as `resources` on a larger filesystem,
+make it a symbolic link. Settings never enter a result's identity, so
+moving or relinking a directory never invalidates stored results.
+
+When the home is the default and nothing overrides `definitions`, `cache`,
+or `resources`, txtures shares no results with anyone, which on a lab
+machine is usually an oversight. The command line then prints a note, and
+the Python API issues a `DefaultLocationsWarning`, once per process.
+
+## Changing site settings
+
+`site.yml` holds the settings that are not locations:
 
 | Key | Default | Meaning |
 | --- | --- | --- |
-| `definitions` | `~/txtures-definitions` | the definitions store |
-| `inputs` | `~/txtures-store/inputs` | input files |
-| `derivatives` | `~/txtures-store/derivatives` | output tables |
-| `items` | `~/txtures-store/items` | stored per-document results |
-| `resources` | `~/txtures-resources` | the resource store and the Hugging Face cache |
 | `execution.device` | `auto` | `auto` (CUDA, then Apple MPS, then CPU), or a PyTorch device such as `cpu` or `cuda:1` |
 | `execution.executor` | `local` | `local` or `slurm` (see [Slurm](slurm.md)) |
 | `execution.max_variants` | 64 | the most variants one module may expand to |
 
 The `slurm` settings are listed in [Slurm](slurm.md#settings).
 
-The defaults keep data in the home directory, apart from code. A lab that
-shares its stores keeps their locations in the `site/site.yml` of its
-definitions store, and each member runs `txtures site use` once.
+```bash
+txtures site set slurm.partition=gpu slurm.account=mylab   # change settings
+txtures site unset slurm.partition                         # return to the default
+```
 
-Each setting takes the first value found in these sources:
+`set` takes any number of `KEY=VALUE` pairs and checks them all before
+writing, so an invalid one changes nothing. A value may itself contain `=`.
+For a list setting, repeat its pair:
+`txtures site set slurm.options=--exclude=node1 slurm.options=--qos=low`.
+`set` also accepts one setting as `KEY VALUE...`, with the values given
+after `--` when they start with a dash:
+`txtures site set slurm.options -- --exclude=node1`. `set` keeps other
+values as written but does not keep comments. `unset` takes any number of
+keys. When a flag or environment variable overrides what was written, the
+command says so. `site ls --json` prints the same listing as JSON, and
+`site show` is another name for `ls`.
 
-1. a command-line flag: `--definitions`, `--inputs`, `--derivatives`,
-   `--items`, or `--resources`, given before the command;
-2. an environment variable: `TXTURES_DEFINITIONS`, `TXTURES_INPUTS`,
-   `TXTURES_DERIVATIVES`, `TXTURES_ITEMS`, or `TXTURES_RESOURCES`;
-3. the installation record, which holds `resources` or
-   `execution.executor` when they were given to `./install`;
-4. personal settings at `$XDG_CONFIG_HOME/txtures/settings.yml`
-   (by default `~/.config/txtures/settings.yml`);
-5. site settings at `site/site.yml` in the definitions store;
-6. the built-in default.
+When several people share a home, a change to `site.yml` applies to all of
+them.
 
-Settings documents use nested YAML:
+`site.yml` uses nested YAML, and unknown keys are errors:
 
 ```yaml
-inputs: /path/to/inputs
 execution:
   device: cuda
 slurm:
   partition: gpu
 ```
 
-Relative paths in a document resolve against the document's directory, and
-relative paths from flags and environment variables against the working
-directory. Unknown keys are errors. Site settings cannot set `definitions`,
-since the definitions store holds them; personal settings can.
+## Departing from your site
 
-Personal settings let one user keep a private inputs directory or store
-without editing the shared site document. To keep studies apart, point
-`inputs` and `derivatives` at different directories.
+Every setting has an environment variable: the key in capitals, with dots
+as underscores and `TXTURES_` in front, such as `TXTURES_HOME`,
+`TXTURES_CACHE`, and `TXTURES_SLURM_PARTITION`. A list variable such as
+`TXTURES_SLURM_OPTIONS` holds its values as shell words, as in
+`TXTURES_SLURM_OPTIONS="--qos=low --exclude=node1"`.
+
+Each setting takes the first value found in these sources:
+
+1. a command-line flag, given before the command: `--home`,
+   `--definitions`, `--inputs`, `--outputs`, `--cache`, or `--resources`;
+2. its environment variable;
+3. for `home`, the home-path file; for a location, the home's
+   subdirectory of the same name; for any other setting, `site.yml`;
+4. the built-in default: `~/txtures-home` for `home`.
+
+Relative paths from flags and environment variables resolve against the
+working directory.
+
+To depart from a shared site for yourself without changing it, keep such
+variables in your shell startup file with `txtures env`, which takes keys
+and values as `txtures site` does:
+
+```bash
+txtures env set outputs=~/my-outputs slurm.partition=debug   # override the site
+txtures env ls                                               # list the variables and whether this shell has them
+txtures env unset slurm.partition                            # follow the site again
+```
+
+For example, `env set outputs=PATH` writes your output tables privately
+while still sharing the lab's cache and models.
+
+`set` and `unset` edit a block of `export` lines marked
+`# >>> txtures env >>>` in your shell startup file and leave the rest of the
+file unchanged. The file is `~/.zshrc` when `SHELL` is zsh, `~/.bashrc` when
+it is bash, and `~/.profile` otherwise; `--file PATH` chooses another. A
+change applies to shells started afterwards, or after `source ~/.bashrc`.
+`set` makes relative paths absolute. `txtures site ls` shows which settings
+come from the environment.
+
+## Moving from earlier versions
+
+Earlier versions kept settings in `~/.config/txtures/settings.yml`, in
+`site/site.yml` inside the definitions store, and in the installation
+record, and named `outputs` `derivatives` and `cache` `items`. txtures
+refuses to run while any of these remain. Its message lists the steps for
+your files: which directories to move or link into the home, the
+`txtures site use` and `txtures site set` commands that record your home
+and its settings, and which old files to remove. `txtures site use` removes
+`~/.config/txtures/settings.yml`, and `./install` removes settings from the
+record. The `site` commands still run meanwhile, with a warning, so the
+steps can be carried out.
 
 ## Installation
 
 `./install` in a checkout creates a self-contained installation in
 `CHECKOUT/txtures-install/`, with a pinned uv, a uv-managed CPython, and the
-locked dependencies from `uv.lock`. The installation holds software only;
-shared data lives in `resources`.
+locked dependencies from `uv.lock`. The installation holds software only.
+Its record, `install.json`, notes the checkout, the environment, the PyTorch
+build, and the versions installed, and holds no settings.
 
 | Option | Meaning |
 | --- | --- |
 | `--prefix DIR` | install into `DIR` instead of the checkout |
 | `--compute cuda\|cpu` | the PyTorch build; default `cuda` on Linux and `cpu` on macOS |
-| `--site DIR` | use the definitions store `DIR`, as `txtures site use DIR` does |
-| `--resources DIR` | fix this installation's `resources`; an existing directory is shared |
-| `--executor local\|slurm` | fix this installation's `execution.executor` |
+| `--site DIR` | use the txtures home `DIR`, as `txtures site use DIR` does |
 | `--bin-dir DIR` | where to put the `txtures` command; default `~/.local/bin` |
 | `--no-launcher` | do not create the `txtures` command |
 | `--default` | make the `txtures` command run this installation, replacing one for another installation |
 | `--dev` | also install the development tools |
 
-Running `./install` again updates the installation and keeps every recorded
-choice that is not given again. `--resources` and `--executor` are recorded
-in the installation and outrank personal and site settings, so give them only
-to fix a value for this installation; otherwise leave them to settings. The
-`txtures` command in `--bin-dir` is replaced only if txtures wrote it.
+Running `./install` again updates the installation and keeps the recorded
+PyTorch build unless `--compute` is given. The `txtures` command in
+`--bin-dir` is replaced only if txtures wrote it.
 
 txtures can also be installed with pip or uv as a dependency of other
 software, for example with `uv add "txtures[cuda]"` or
 `pip install "txtures[cuda]"`, or without an extra alongside a PyTorch you
 install yourself. The `cpu`
 extra selects PyTorch's CPU-only build only within `./install`; elsewhere,
-install that build yourself. Such an installation has no record and uses
-settings alone. It still provides
+install that build yourself. Such an installation has no record. It still provides
 the `txtures` command in its environment, so `txtures site use` works
 there too.
 
@@ -130,7 +192,7 @@ come from:
 | --- | --- |
 | `HF_HOME` | `RESOURCES/huggingface` |
 | `HF_HUB_CACHE` | `RESOURCES/huggingface/hub` |
-| `HF_TOKEN_PATH` | `hf-token` beside personal settings |
+| `HF_TOKEN_PATH` | `hf-token` beside the home-path file |
 | `HF_HUB_DISABLE_TELEMETRY` | `1` |
 | `TOKENIZERS_PARALLELISM` | `false` |
 
@@ -149,7 +211,7 @@ txtures hf whoami     # shows the account the saved token belongs to
 txtures hf logout     # deletes the saved token
 ```
 
-`login` checks the token with the hub and saves it beside your personal
-settings, readable only by you. Tokens are personal and never stored in the
+`login` checks the token with the hub and saves it beside your
+home-path file, readable only by you. Tokens are personal and never stored in the
 shared `resources` directory. Without a saved token, the Python API lets the
 Hugging Face libraries find one as they usually do, such as from `HF_TOKEN`.

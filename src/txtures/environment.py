@@ -20,17 +20,17 @@ from collections.abc import MutableMapping
 from pathlib import Path
 
 from txtures.modules import RunContext
-from txtures.settings import Settings, personal_settings_path
+from txtures.settings import Settings, config_directory
 
 MANAGED_PREFIXES = ("HF_", "HUGGINGFACE_", "TRANSFORMERS_")
 
 
 def token_path(env: MutableMapping[str, str], home: Path) -> Path:
-    """Where the user's Hugging Face token is kept: beside personal settings.
+    """Where the user's Hugging Face token is kept: in the txtures configuration directory.
 
     Tokens are personal, so they never live in the shared cache.
     """
-    return personal_settings_path(env, home).with_name("hf-token")
+    return config_directory(env, home) / "hf-token"
 
 
 def saved_token(

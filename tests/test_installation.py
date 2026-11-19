@@ -27,7 +27,7 @@ def configured(prefix, tmp_path, **options):
 
 
 def test_apply_replaces_inherited_hugging_face_variables(tmp_path):
-    settings = resolve_settings({"resources": str(tmp_path / "res")}, env={}, home=tmp_path)
+    settings = resolve_settings({"resources": str(tmp_path / "res")}, env={}, user_home=tmp_path)
     env = {
         "HF_HOME": "/elsewhere",
         "HF_HUB_OFFLINE": "1",
@@ -59,14 +59,41 @@ def test_first_configuration_records_only_given_settings(prefix, tmp_path):
     assert messages[0].startswith("installed txtures")
 
 
-def test_reconfiguration_keeps_settings_not_given(prefix, tmp_path):
-    configured(prefix, tmp_path, resources=tmp_path / "shared", executor="slurm")
-    installed, _ = configured(prefix, tmp_path, compute="cuda")
+def add_old_settings(prefix: Path, settings: dict) -> None:
+    """Make the record look like one written when installations held settings."""
+    path = prefix / "install.json"
+    record = json.loads(path.read_text())
+    path.write_text(json.dumps({**record, "settings": settings}))
+
+
+def test_reconfiguration_removes_settings_left_by_earlier_versions(prefix, tmp_path):
+    configured(prefix, tmp_path)
+    add_old_settings(prefix, {"resources": "/shared/res", "execution.executor": "slurm"})
+    assert read(prefix).settings == {"resources": "/shared/res", "execution.executor": "slurm"}
+    installed, messages = configured(prefix, tmp_path, compute="cuda")
     assert installed.compute == "cuda"
-    assert installed.settings == {
-        "resources": str(tmp_path / "shared"),
-        "execution.executor": "slurm",
-    }
+    assert installed.settings == {}
+    assert "settings" not in json.loads((prefix / "install.json").read_text())
+    assert (
+        "removed resources, execution.executor from the installation record, which no longer "
+        "holds settings; to keep them, move or symlink /shared/res to HOME/resources; "
+        "run `txtures site set execution.executor=slurm`"
+    ) in messages
+
+
+def test_settings_in_an_earlier_record_are_refused(prefix, tmp_path, monkeypatch):
+    from txtures import api, installation
+
+    configured(prefix, tmp_path)
+    add_old_settings(prefix, {"resources": "/shared/res"})
+    monkeypatch.setattr(installation, "current", lambda: read(prefix))
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "home" / ".config"))
+    with pytest.raises(SettingsError, match="installations no longer hold settings"):
+        api.settings()
+    assert api.settings(tolerate_stale=True).resources == (
+        tmp_path / "home" / "txtures-home" / "resources"
+    )
 
 
 def test_invalid_record_is_reported(prefix):
@@ -117,23 +144,23 @@ def test_user_launcher_never_replaces_another_command(tmp_path):
     assert LAUNCHER_MARKER not in (bin_dir / "txtures").read_text()
 
 
-def test_site_option_writes_personal_settings(prefix, tmp_path, monkeypatch):
+def test_site_option_chooses_the_site(prefix, tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "home" / ".config"))
-    store = tmp_path / "definitions"
-    store.mkdir()
-    _, messages = configured(prefix, tmp_path, site=store)
-    assert messages[-1].startswith(f"set definitions to {store}")
-    personal = tmp_path / "home" / ".config" / "txtures" / "settings.yml"
-    assert f"definitions: {store}" in personal.read_text()
-    with pytest.raises(SettingsError, match="not a definitions store directory"):
+    txh = tmp_path / "txh"
+    txh.mkdir()
+    _, messages = configured(prefix, tmp_path, site=txh)
+    assert messages[-1].startswith(f"set home to {txh}")
+    pointer = tmp_path / "home" / ".config" / "txtures" / "home-path"
+    assert pointer.read_text() == f"{txh}\n"
+    with pytest.raises(SettingsError, match="not a txtures home directory"):
         configured(prefix, tmp_path, site=tmp_path / "missing")
 
 
 def test_run_context_carries_the_saved_token(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / ".config"))
-    settings = resolve_settings({}, env={}, home=tmp_path)
+    settings = resolve_settings({}, env={}, user_home=tmp_path)
     assert environment.run_context(settings).hf_token is None
     path = environment.token_path(dict(os.environ), tmp_path)
     path.parent.mkdir(parents=True)

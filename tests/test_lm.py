@@ -415,7 +415,7 @@ def test_undetected_boundaries_refuse_correction():
 def env(tmp_path: Path, toy_models):
     locations = {
         key: str(tmp_path / key)
-        for key in ("definitions", "inputs", "derivatives", "resources", "items")
+        for key in ("definitions", "inputs", "outputs", "resources", "cache")
     }
     write(
         tmp_path / "definitions" / "configs" / "lm_scores" / "toy.yml",
@@ -442,7 +442,7 @@ def env(tmp_path: Path, toy_models):
     return resolve_settings(
         {**locations, "execution.device": "cpu"},
         env={},
-        home=tmp_path / "home",
+        user_home=tmp_path / "home",
     )
 
 
@@ -452,7 +452,7 @@ def run(settings, workflow):
     definitions = Definitions.load(settings.definitions, REGISTRY)
     plan = plan_request(settings, definitions, "doc", workflow)
     executor = Executor(
-        plan, EntryStore(settings.items), EntryStore(settings.resource_store), RunContext("cpu")
+        plan, EntryStore(settings.cache), EntryStore(settings.resource_store), RunContext("cpu")
     )
     return plan, executor, run_request(plan, executor, None)
 

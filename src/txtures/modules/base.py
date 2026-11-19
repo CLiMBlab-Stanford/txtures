@@ -104,7 +104,7 @@ class Module:
             config fields one sweep entry may set, starting with the key
             itself; for example, a `model` entry may also set `revision`.
             Order determines the order in which sweeps expand.
-        persist: Whether results are kept in the item store. Cheap modules
+        persist: Whether results are kept in the cache. Cheap modules
             set this to false and are recomputed whenever they are needed.
         batch_size: Maximum number of documents passed to one `run_batch` call.
     """

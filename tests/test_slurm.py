@@ -106,17 +106,17 @@ def test_a_shard_computes_its_own_items_first(tmp_path):
     from txtures.settings import resolve_settings
     from txtures.store import EntryStore
 
-    locations = {key: str(tmp_path / key) for key in ("inputs", "derivatives", "items")}
+    locations = {key: str(tmp_path / key) for key in ("inputs", "outputs", "cache")}
     locations["resources"] = str(tmp_path / "resources")
     locations["definitions"] = str(tmp_path / "definitions")
     (tmp_path / "definitions").mkdir()
-    settings = resolve_settings(locations, env={}, home=tmp_path)
+    settings = resolve_settings(locations, env={}, user_home=tmp_path)
     add_input(settings, DOCS)
     fake_modules.reset()
     plan = plan_request(settings, definitions(settings), "doc")
     executor = Executor(
         plan,
-        EntryStore(settings.items),
+        EntryStore(settings.cache),
         EntryStore(settings.resource_store),
         RunContext(),
         shard=(1, 2),
@@ -150,7 +150,7 @@ def fake_slurm(monkeypatch, fake_engine):  # noqa: F811
     slurm = FakeSlurm()
     monkeypatch.setattr(cli, "_slurm", lambda: slurm)
     write(
-        fake_engine / "home" / ".config" / "txtures" / "settings.yml",
+        Path(os.environ["TXTURES_HOME"]) / "site.yml",
         "execution:\n  executor: slurm\nslurm:\n  partition: gpu\n  workers: 2\n",
     )
     return slurm
@@ -161,9 +161,9 @@ def test_run_submits_and_tasks_write_the_table(capsys, fake_slurm, fake_engine):
     out = capsys.readouterr().out
     assert "submitted job 42 (2 tasks)" in out
     assert "#SBATCH --array=0-1" in fake_slurm.scripts[0]
-    (job,) = slurm_jobs.jobs(fake_engine / "derivatives")
+    (job,) = slurm_jobs.jobs(fake_engine / "outputs")
     assert job.job_id == "42" and job.workers == 2
-    assert not list((fake_engine / "derivatives" / "doc").glob("main-*"))
+    assert not list((fake_engine / "outputs" / "doc").glob("main-*"))
 
     fake_slurm.task_states = {"42_0": "PENDING", "42_1": "PENDING"}
     assert main(["run", "doc"]) == 0
@@ -186,12 +186,12 @@ def test_run_submits_and_tasks_write_the_table(capsys, fake_slurm, fake_engine):
     assert "is already current" in capsys.readouterr().out
     assert main(["gc"]) == 0
     assert "removed the record and logs of finished job 42" in capsys.readouterr().out
-    assert slurm_jobs.jobs(fake_engine / "derivatives") == []
+    assert slurm_jobs.jobs(fake_engine / "outputs") == []
 
 
 def test_task_refuses_a_changed_request(capsys, fake_slurm, fake_engine):  # noqa: F811
     assert main(["run", "doc"]) == 0
-    (job,) = slurm_jobs.jobs(fake_engine / "derivatives")
+    (job,) = slurm_jobs.jobs(fake_engine / "outputs")
     write(fake_engine / "inputs" / "doc.txt", "Changed.\n")
     capsys.readouterr()
     assert main(["worker", str(job.directory), "0"]) == 1
@@ -232,7 +232,7 @@ def test_real_slurm_job(tmp_path):
         rows = "".join(f"{n}\tab ba b a\n" if n % 2 else f"{n}\tb ab\n" for n in range(6))
         write(root / "inputs" / "doc.tsv", "document_id\ttext\n" + rows)
         write(
-            root / "home" / ".config" / "txtures" / "settings.yml",
+            root / "site.yml",
             f"execution:\n  executor: slurm\n  device: cpu\nslurm:\n  partition: {partition}\n"
             "  gpus: 0\n  cpus: 1\n  memory_gb: 4\n  time_hours: 1\n"
             + (f"  account: {account}\n" if account else ""),
@@ -241,10 +241,7 @@ def test_real_slurm_job(tmp_path):
             **os.environ,
             "HOME": str(root / "home"),
             "XDG_CONFIG_HOME": str(root / "home" / ".config"),
-            **{
-                f"TXTURES_{key.upper()}": str(root / key)
-                for key in ("definitions", "inputs", "derivatives", "items", "resources")
-            },
+            "TXTURES_HOME": str(root),
         }
         txtures = [sys.executable, "-I", "-m", "txtures"]
         submitted = subprocess.run(
@@ -270,7 +267,7 @@ def test_real_slurm_job(tmp_path):
         assert set(job["tasks"].values()) == {"COMPLETED"}, logs
         assert [table["state"] for table in status["tables"]] == ["current"], logs
         assert logs.count("wrote ") == 1
-        (table,) = (root / "derivatives" / "doc").glob("toy-*/doc.tsv")
+        (table,) = (root / "outputs" / "doc").glob("toy-*/doc.tsv")
         assert len(table.read_text().splitlines()) == 1 + 3 * 4 + 3 * 2
     finally:
         shutil.rmtree(root, ignore_errors=True)

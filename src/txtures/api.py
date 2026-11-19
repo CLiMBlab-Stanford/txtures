@@ -12,7 +12,7 @@ The API does not change the process environment. It passes its Hugging
 Face cache and token to the Hugging Face libraries directly, so a host
 program's own use of those libraries is unaffected.
 
-When the definitions store, item store, and resources all come from
+When the definitions store, cache, and resources all come from
 built-in defaults, the first call warns once and suggests how to point
 txtures at shared locations.
 """
@@ -32,7 +32,7 @@ from txtures.engine import Executor, Plan, plan_request, run_request
 from txtures.engine.tables import read_table, table_frame
 
 __all__ = ["compute", "read_table", "run"]
-from txtures.errors import DefinitionError, InputError, Problem
+from txtures.errors import DefinitionError, InputError, Problem, SettingsError
 from txtures.inputs import InputSettings, read_texts
 from txtures.modules import REGISTRY
 from txtures.settings import Settings, resolve_settings, uses_default_locations
@@ -45,40 +45,38 @@ Texts = str | Sequence[str | Sequence[str]] | Mapping[str, str | Sequence[str]]
 
 
 DEFAULT_LOCATIONS_MESSAGE = """\
-txtures is using its default locations in your home directory, so it shares no
-results with others. To use a shared site, run once:
+txtures is using its default home, ~/txtures-home, so it shares no results with
+others. To use a lab's shared home, run once:
 
-    txtures site use /path/to/txtures-definitions
+    txtures site use /path/to/txtures-home
 
-or set locations one at a time:
-
-    txtures site set items /path/to/items
-    txtures site set resources /path/to/txtures-resources
-
-`txtures site ls` lists every setting. Environment variables such as
-TXTURES_DEFINITIONS, and arguments to the Python API, also set locations."""
+`txtures site ls` lists every setting. TXTURES_HOME, and the `home` argument
+of the Python API, also choose a home."""
 
 _warned_defaults = False
 
 
-def settings(flags: Mapping[str, Any] | None = None) -> Settings:
+def settings(flags: Mapping[str, Any] | None = None, *, tolerate_stale: bool = False) -> Settings:
     """Resolve settings, with `flags` taking precedence.
 
     `flags` maps setting keys, such as `items` or `execution.device`, to
-    values. The installation running this interpreter, if any, supplies the
-    settings it records. Warns once per process when every shared location
-    comes from built-in defaults.
+    values. Warns once per process when every shared location comes from
+    built-in defaults.
+
+    Settings that earlier versions kept outside the site, in a personal
+    settings document or the installation record, are refused with a
+    message saying how to move them; with `tolerate_stale` they are ignored
+    instead.
 
     Raises:
-        SettingsError: A settings document or value is invalid.
+        SettingsError: A settings document or value is invalid, or settings
+            remain outside the site.
     """
     global _warned_defaults
     installed = installation.current()
-    resolved = resolve_settings(
-        flags,
-        installation=installed.settings if installed else None,
-        installation_source=installed.source if installed else "installation",
-    )
+    if installed is not None and installed.settings and not tolerate_stale:
+        raise SettingsError(installation.stale_message(installed))
+    resolved = resolve_settings(flags, tolerate_stale=tolerate_stale)
     if not _warned_defaults and uses_default_locations(resolved):
         _warned_defaults = True
         warnings.warn(DEFAULT_LOCATIONS_MESSAGE, DefaultLocationsWarning, stacklevel=3)
@@ -90,7 +88,7 @@ class DefaultLocationsWarning(UserWarning):
 
 
 def load_definitions(resolved: Settings) -> Definitions:
-    """Load the selected definitions store, or the packaged definitions if it does not exist."""
+    """Load the definitions store in use, or the packaged definitions if it does not exist."""
     if resolved.definitions.is_dir():
         return Definitions.load(resolved.definitions)
     return Definitions.packaged()
@@ -100,7 +98,7 @@ def local_executor(plan: Plan, resolved: Settings, progress: Callable[[str], Non
     """An executor for `plan` on this machine, using the configured stores."""
     return Executor(
         plan,
-        EntryStore(resolved.items),
+        EntryStore(resolved.cache),
         EntryStore(resolved.resource_store),
         environment.run_context(resolved),
         progress,
@@ -119,10 +117,11 @@ def run(
     workflow: str = MAIN,
     modules: Sequence[str] | None = None,
     *,
+    home: Path | str | None = None,
     definitions: Path | str | None = None,
     inputs: Path | str | None = None,
-    derivatives: Path | str | None = None,
-    items: Path | str | None = None,
+    outputs: Path | str | None = None,
+    cache: Path | str | None = None,
     resources: Path | str | None = None,
     device: str | None = None,
     progress: Callable[[str], None] | None = None,
@@ -130,7 +129,7 @@ def run(
     """Compute a request for the input `name` and return its output table.
 
     This is `txtures run NAME --workflow WORKFLOW --modules ...`: the table
-    is written to the derivatives directory, or reused if it is current, and
+    is written to the outputs directory, or reused if it is current, and
     then read with `read_table`. The keyword arguments override settings for
     this call; `progress`, if given, receives progress messages.
 
@@ -141,10 +140,11 @@ def run(
     resolved = settings(
         _flags(
             {
+                "home": home,
                 "definitions": definitions,
                 "inputs": inputs,
-                "derivatives": derivatives,
-                "items": items,
+                "outputs": outputs,
+                "cache": cache,
                 "resources": resources,
             },
             device,
@@ -166,8 +166,9 @@ def compute(
     sentence_delimiter: str | None = None,
     region_joiner: str = " ",
     sentence_joiner: str = " ",
+    home: Path | str | None = None,
     definitions: Path | str | None = None,
-    items: Path | str | None = None,
+    cache: Path | str | None = None,
     resources: Path | str | None = None,
     device: str | None = None,
     progress: Callable[[str], None] | None = None,
@@ -212,7 +213,10 @@ def compute(
         raise InputError(report.problems)
     _warn(str(warning) for warning in report.warnings)
     resolved = settings(
-        _flags({"definitions": definitions, "items": items, "resources": resources}, device)
+        _flags(
+            {"home": home, "definitions": definitions, "cache": cache, "resources": resources},
+            device,
+        )
     )
     chosen = load_definitions(resolved) if config is None else _given(config)
     plan = plan_request(

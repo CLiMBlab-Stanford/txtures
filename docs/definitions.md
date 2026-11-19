@@ -1,18 +1,19 @@
 # Definitions
 
-Scientific parameters live in a definitions store, a directory of YAML files.
+Scientific parameters live in a definitions store, a directory of YAML
+files, usually the `definitions` directory of the txtures home.
 A run's results depend only on its input and the definitions it resolves, so
 the store, which a lab can track in Git, records how every table was made.
 
 ```text
 DEFINITIONS/
-├── site/site.yml          storage and execution settings (see Settings)
 ├── configs/MODULE/ID.yml  configs, one directory per module
 └── workflows/ID.yml       workflows
 ```
 
-`txtures def init [PATH]` creates a store with an example config and
-workflow. `txtures def validate [PATH]` checks every file in it, including
+`txtures site init` creates a home whose store has an example config and
+workflow, and `txtures def init PATH` creates a store of its own, for use
+with `TXTURES_DEFINITIONS`. `txtures def validate [PATH]` checks every file in it, including
 definitions no workflow uses. Without a store, txtures uses its packaged
 definitions alone.
 

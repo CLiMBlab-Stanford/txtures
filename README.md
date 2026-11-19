@@ -21,15 +21,14 @@ changing any Python already on the machine. It puts a `txtures` command in
 `~/.local/bin`. Useful options:
 
 - `--compute cpu` installs PyTorch without CUDA (the default on Linux is CUDA).
-- `--site DIR` uses a lab's definitions store, whose site settings name the
-  shared stores of models and results. `txtures site use DIR` does the same
-  later.
+- `--site DIR` uses a lab's txtures home, which holds its definitions,
+  stored results, and models. `txtures site use DIR` does the same later.
 - `--prefix DIR` installs somewhere other than the checkout.
 
-On a Slurm cluster, `./install --executor slurm` makes `txtures run` submit
-its computation as a job and return at once; set the partition with
-`txtures site set slurm.partition NAME` (and optionally `slurm.account`,
-`slurm.gpus`, and others), and follow the job with `txtures status`.
+On a Slurm cluster, `txtures site set execution.executor=slurm
+slurm.partition=NAME` makes `txtures run` submit its computation as a job
+and return at once (`slurm.account`, `slurm.gpus`, and others are optional).
+Follow the job with `txtures status`.
 
 Run `./install --help` for every option and `txtures site ls` to see the
 resulting settings. For gated models, run `txtures hf login` once.
@@ -48,7 +47,7 @@ txtures run gardenpath
 ```
 
 This writes a table with one row per word and its surprisal under GPT-2 to
-the derivatives directory. From Python:
+the outputs directory. From Python:
 
 ```python
 import txtures as tx

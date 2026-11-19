@@ -201,7 +201,7 @@ def plan_request(
     identity = table_identity(
         corpus, [(column.name, planned[column.variant.digest].identity) for column in columns]
     )
-    directory = settings.derivatives / corpus.name / f"{workflow}-{identity[:12]}"
+    directory = settings.outputs / corpus.name / f"{workflow}-{identity[:12]}"
     return Plan(
         input_name=corpus.name,
         corpus=corpus,
@@ -218,7 +218,7 @@ def plan_request(
 
 @dataclass(frozen=True)
 class VariantStatus:
-    """How many of a persisted variant's items exist in the item store."""
+    """How many of a persisted variant's items exist in the cache."""
 
     variant: PlannedVariant
     present: int

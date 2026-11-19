@@ -30,11 +30,11 @@ def env(tmp_path: Path):
     """Settings pointing every location into a temporary directory."""
     locations = {
         key: str(tmp_path / key)
-        for key in ("definitions", "inputs", "derivatives", "resources", "items")
+        for key in ("definitions", "inputs", "outputs", "resources", "cache")
     }
     (tmp_path / "definitions").mkdir()
     (tmp_path / "inputs").mkdir()
-    settings = resolve_settings(locations, env={}, home=tmp_path / "home")
+    settings = resolve_settings(locations, env={}, user_home=tmp_path / "home")
     return settings
 
 
@@ -45,7 +45,7 @@ def definitions(settings) -> Definitions:
 def run(settings, name="doc", workflow="main", modules=None):
     plan = plan_request(settings, definitions(settings), name, workflow, modules)
     executor = Executor(
-        plan, EntryStore(settings.items), EntryStore(settings.resource_store), RunContext()
+        plan, EntryStore(settings.cache), EntryStore(settings.resource_store), RunContext()
     )
     directory, written = run_request(plan, executor, modules)
     return plan, executor, directory, written
@@ -70,7 +70,7 @@ def test_run_writes_table_columns_and_manifest(env):
     add_input(env, DOCS)
     plan, executor, directory, written = run(env)
     assert written
-    assert directory.parent == env.derivatives / "doc"
+    assert directory.parent == env.outputs / "doc"
     assert directory.name == f"main-{plan.table_identity[:12]}"
     rows = read_table(directory)
     assert rows[0] == [
@@ -250,10 +250,10 @@ def test_unpinned_revision_produces_a_note(env):
 def test_item_status_counts_present_and_missing(env):
     add_input(env, DOCS)
     plan = plan_request(env, definitions(env), "doc")
-    (status,) = item_status(plan, EntryStore(env.items))
+    (status,) = item_status(plan, EntryStore(env.cache))
     assert (status.present, status.missing) == (0, 3)
     run(env)
-    (status,) = item_status(plan, EntryStore(env.items))
+    (status,) = item_status(plan, EntryStore(env.cache))
     assert (status.present, status.missing) == (3, 0)
 
 
@@ -282,13 +282,11 @@ def test_failure_keeps_finished_items_and_writes_no_table(env):
     with pytest.raises(RuntimeError, match="failed on 'boom here'"):
         run(env)
     plan = plan_request(env, definitions(env), "doc")
-    (status,) = item_status(plan, EntryStore(env.items))
+    (status,) = item_status(plan, EntryStore(env.cache))
     assert status.present == 0  # the failing batch held documents 1 and 2
-    assert not (env.derivatives / "doc").exists() or not any(
-        p for p in (env.derivatives / "doc").iterdir()
-    )
-    assert not list(Path(env.items).rglob("*.lock"))
-    assert not [p for p in Path(env.items).rglob(".*") if p.is_dir()]
+    assert not (env.outputs / "doc").exists() or not any(p for p in (env.outputs / "doc").iterdir())
+    assert not list(Path(env.cache).rglob("*.lock"))
+    assert not [p for p in Path(env.cache).rglob(".*") if p.is_dir()]
     STATE["fail_on"] = None
     CALLS.clear()
     run(env)
@@ -301,7 +299,7 @@ def test_failure_after_a_finished_batch_keeps_that_batch(env):
     with pytest.raises(RuntimeError):
         run(env)
     plan = plan_request(env, definitions(env), "doc")
-    (status,) = item_status(plan, EntryStore(env.items))
+    (status,) = item_status(plan, EntryStore(env.cache))
     assert status.present == 2
 
 
@@ -358,10 +356,10 @@ def test_status_reports_current_stale_and_broken(env):
     _, _, old, _ = run(env)
     add_input(env, DOCS.replace("It fell.", "It rose."))
     _, _, new, _ = run(env)
-    (env.derivatives / "doc" / "main-broken").mkdir()
-    (env.derivatives / "doc" / ".main-x.tmp").mkdir()
+    (env.outputs / "doc" / "main-broken").mkdir()
+    (env.outputs / "doc" / ".main-x.tmp").mkdir()
     statuses = {
-        s.path.name: s for s in table_statuses(env.derivatives, replanner(env, definitions(env)))
+        s.path.name: s for s in table_statuses(env.outputs, replanner(env, definitions(env)))
     }
     assert statuses[new.name].state == "current"
     assert statuses[old.name].state == "stale"
@@ -373,7 +371,7 @@ def test_status_marks_tables_of_removed_inputs_stale(env):
     add_input(env, DOCS)
     _, _, directory, _ = run(env)
     (env.inputs / "doc.tsv").unlink()
-    (status,) = table_statuses(env.derivatives, replanner(env, definitions(env)))
+    (status,) = table_statuses(env.outputs, replanner(env, definitions(env)))
     assert status.state == "stale"
     assert "no input named 'doc'" in status.reason
 

@@ -36,10 +36,11 @@ ACTIVE_STATES = frozenset(
     {"PENDING", "RUNNING", "CONFIGURING", "COMPLETING", "REQUEUED", "RESIZING", "SUSPENDED"}
 )
 FORWARDED_SETTINGS = (
+    "home",
     "definitions",
     "inputs",
-    "derivatives",
-    "items",
+    "outputs",
+    "cache",
     "resources",
     "execution.device",
     "execution.max_variants",
@@ -60,8 +61,8 @@ class Job:
     request: Mapping[str, Any]
 
 
-def job_directory(derivatives: Path, plan: Plan) -> Path:
-    return derivatives / JOBS_DIRECTORY / plan.input_name / plan.table_directory.name
+def job_directory(outputs: Path, plan: Plan) -> Path:
+    return outputs / JOBS_DIRECTORY / plan.input_name / plan.table_directory.name
 
 
 class Slurm:
@@ -120,7 +121,7 @@ def batch_script(
     """The batch script for a request's job array."""
     if not slurm.get("partition"):
         raise TxturesError(
-            "Slurm execution needs slurm.partition; set it in site or personal settings"
+            "Slurm execution needs slurm.partition; set it with `txtures site set slurm.partition=NAME`"
         )
     options = [
         f"--job-name=txtures-{name}",
@@ -157,9 +158,9 @@ def read_job(directory: Path) -> Job | None:
         return None
 
 
-def jobs(derivatives: Path, names: Sequence[str] | None = None) -> list[Job]:
+def jobs(outputs: Path, names: Sequence[str] | None = None) -> list[Job]:
     """Every recorded job, or those of the given inputs."""
-    root = derivatives / JOBS_DIRECTORY
+    root = outputs / JOBS_DIRECTORY
     if not root.is_dir():
         return []
     inputs = [root / name for name in names] if names else sorted(root.iterdir())
@@ -185,7 +186,7 @@ def submit(
     Raises:
         TxturesError: Slurm settings are incomplete or `sbatch` failed.
     """
-    directory = job_directory(settings.derivatives, plan)
+    directory = job_directory(settings.outputs, plan)
     make_shared_dir(directory / "logs")
     request = {
         "input": plan.input_name,

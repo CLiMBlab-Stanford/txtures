@@ -9,8 +9,9 @@ default:
 - `env/`: the environment, with txtures installed from the checkout;
 - `bin/txtures`: the launcher, which runs the environment's interpreter in
   isolated mode;
-- `install.json`: the choices made at installation, including any settings
-  the installation fixes (`resources` and `execution.executor`, when given).
+- `install.json`: facts about the installation: its checkout, environment,
+  PyTorch build, and versions. It holds no settings; those live in the
+  site (see `txtures.settings`).
 
 `./install` bootstraps uv and the environment and then runs this module's
 `configure` command with the environment's interpreter.
@@ -30,18 +31,21 @@ from typing import Any
 
 from txtures import __version__
 from txtures.errors import SettingsError
-from txtures.settings import set_personal
+from txtures.settings import RENAMED, SPEC_BY_KEY, use_site
 
 RECORD = "install.json"
 RECORD_VERSION = 1
 LAUNCHER_MARKER = "# txtures launcher written by ./install"
 COMPUTE = ("cuda", "cpu")
-EXECUTORS = ("local", "slurm")
 
 
 @dataclass(frozen=True)
 class Installation:
-    """A parsed installation record."""
+    """A parsed installation record.
+
+    `settings` is empty except in records written by earlier versions, which
+    could fix `resources` and `execution.executor`; see `stale_message`.
+    """
 
     prefix: Path
     checkout: Path
@@ -71,11 +75,38 @@ def read(prefix: Path) -> Installation | None:
             prefix=prefix,
             checkout=Path(record["checkout"]),
             compute=str(record["compute"]),
-            settings=dict(record["settings"]),
+            settings=dict(record.get("settings", {})),
             record=record,
         )
     except (OSError, ValueError, KeyError, TypeError, AttributeError) as error:
         raise SettingsError(f"{path}: invalid installation record: {error}") from error
+
+
+def keep_advice(values: Mapping[str, Any]) -> str:
+    """Say how to keep settings that an earlier version stored elsewhere, in the txtures home."""
+    import shlex
+
+    advice = []
+    for key, value in values.items():
+        key = RENAMED.get(key, key)
+        if key == "home" or key not in SPEC_BY_KEY:
+            continue
+        if SPEC_BY_KEY[key].location:
+            advice.append(f"move or symlink {value} to HOME/{key}")
+        else:
+            items = value if isinstance(value, list) else [value]
+            pairs = " ".join(shlex.quote(f"{key}={item}") for item in items)
+            advice.append(f"run `txtures site set {pairs}`")
+    return "; ".join(advice)
+
+
+def stale_message(installation: Installation) -> str:
+    """Explain how to move settings out of an earlier installation record and into the home."""
+    return (
+        f"{installation.prefix / RECORD} sets {', '.join(installation.settings)}, but "
+        "installations no longer hold settings; every setting lives in the txtures home. "
+        f"Run `./install` again to remove them; to keep them, {keep_advice(installation.settings)}."
+    )
 
 
 def current() -> Installation | None:
@@ -143,8 +174,6 @@ def configure(
     checkout: Path,
     *,
     compute: str,
-    resources: Path | None = None,
-    executor: str | None = None,
     bin_dir: Path | None = None,
     make_default: bool = False,
     uv_version: str = "",
@@ -152,26 +181,21 @@ def configure(
 ) -> tuple[Installation, list[str]]:
     """Write the installation record and launchers.
 
-    The record fixes only the settings given here or in an earlier run;
-    other settings resolve as they would without an installation. `site`, a
-    definitions store, is written to the user's personal settings, as
-    `txtures site use` does. Returns the installation and messages to print.
+    The record holds no settings. One written by an earlier version that did
+    is rewritten without them, and a message names them. `site`, a
+    txtures home, is chosen as the user's site, as `txtures site use` does. Returns the installation and messages to print.
 
     Raises:
         SettingsError: A choice is invalid, or `site` is not a directory.
     """
     if compute not in COMPUTE:
         raise SettingsError(f"compute must be one of {', '.join(COMPUTE)}")
-    if executor is not None and executor not in EXECUTORS:
-        raise SettingsError(f"executor must be one of {', '.join(EXECUTORS)}")
-    previous = read(prefix)
-    settings = dict(previous.settings) if previous else {}
+    try:
+        previous = read(prefix)
+    except SettingsError:
+        previous = None
     if site is not None and not site.expanduser().is_dir():
-        raise SettingsError(f"site {site} is not a definitions store directory")
-    if resources is not None:
-        settings["resources"] = str(resources.expanduser().absolute())
-    if executor is not None:
-        settings["execution.executor"] = executor
+        raise SettingsError(f"site {site} is not a txtures home directory")
 
     environment = prefix / "env"
     record = {
@@ -179,7 +203,6 @@ def configure(
         "checkout": str(checkout),
         "environment": str(environment),
         "compute": compute,
-        "settings": settings,
         "txtures_version": __version__,
         "python_version": platform.python_version(),
         "uv_version": uv_version,
@@ -191,12 +214,21 @@ def configure(
     launcher = prefix / "bin" / "txtures"
     _write_executable(launcher, launcher_text(environment / "bin" / "python", python=True))
     messages = [f"installed txtures {__version__} ({compute}) in {prefix}"]
-    messages += [f"  {key}: {value}" for key, value in sorted(settings.items())]
+    if previous is not None and previous.settings:
+        messages.append(
+            f"removed {', '.join(previous.settings)} from the installation record, which no "
+            f"longer holds settings; to keep them, {keep_advice(previous.settings)}"
+        )
     if bin_dir is not None:
         messages.append(install_user_launcher(bin_dir, launcher, make_default))
     if site is not None:
-        path = set_personal("definitions", [str(site.expanduser().absolute())])
-        messages.append(f"set definitions to {site} in {path}")
+        path, legacy = use_site(site)
+        messages.append(f"set home to {site} in {path}")
+        if legacy:
+            messages.append(
+                f"removed the settings file of an earlier txtures, which set "
+                f"{', '.join(legacy)}; to keep them, {keep_advice(legacy)}"
+            )
     installation = read(prefix)
     assert installation is not None
     return installation, messages
@@ -209,8 +241,6 @@ def main(argv: Sequence[str] | None = None) -> int:
     setup.add_argument("--prefix", type=Path, required=True)
     setup.add_argument("--checkout", type=Path, required=True)
     setup.add_argument("--compute", choices=COMPUTE, required=True)
-    setup.add_argument("--resources", type=Path)
-    setup.add_argument("--executor", choices=EXECUTORS)
     setup.add_argument("--bin-dir", type=Path)
     setup.add_argument("--default", action="store_true", dest="make_default")
     setup.add_argument("--uv-version", default="")
@@ -221,8 +251,6 @@ def main(argv: Sequence[str] | None = None) -> int:
             args.prefix.absolute(),
             args.checkout.absolute(),
             compute=args.compute,
-            resources=args.resources,
-            executor=args.executor,
             bin_dir=args.bin_dir,
             make_default=args.make_default,
             uv_version=args.uv_version,

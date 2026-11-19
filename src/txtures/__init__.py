@@ -6,7 +6,7 @@ The Python API::
 
     table = tx.compute("surprisal", ["The horse raced past the barn fell."])
     table = tx.run("bk21")
-    table = tx.read_table("derivatives/bk21/main-0123456789ab")
+    table = tx.read_table("outputs/bk21/main-0123456789ab")
 
 See `txtures.api` for the details.
 """
