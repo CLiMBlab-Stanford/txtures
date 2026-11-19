@@ -230,12 +230,11 @@ def test_compute_through_the_api_matches_golden_values(tmp_path, monkeypatch):
     (tmp_path / "resources" / "huggingface" / "hub").symlink_to(hub)
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "home" / ".config"))
-    for key in ("definitions", "inputs", "derivatives", "items", "resources"):
-        monkeypatch.setenv(f"TXTURES_{key.upper()}", str(tmp_path / key))
+    monkeypatch.setenv("TXTURES_HOME", str(tmp_path))
 
     config = {"lm_scores": {"model": "gpt2", "revision": GPT2_REVISION}}
     table = tx.compute("surprisal", list(GOLDEN), config=config, device="cpu")
     for document_id, expected in enumerate(GOLDEN.values(), start=1):
         values = table.loc[table["document_id"] == str(document_id), "surprisal"]
         np.testing.assert_allclose(values, expected, atol=1e-3)
-    assert (tmp_path / "items" / "lm_scores").is_dir()
+    assert (tmp_path / "cache" / "lm_scores").is_dir()

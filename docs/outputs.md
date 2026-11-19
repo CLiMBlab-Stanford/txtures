@@ -78,7 +78,7 @@ Results are kept in two content-addressed stores, which a lab can share:
 
 | Setting | Holds |
 | --- | --- |
-| `items` | per-document results of persisted modules, such as `lm_scores` |
+| `cache` | per-document results of persisted modules, such as `lm_scores` |
 | `resources` | the resource store (`store/`), with model properties, and the Hugging Face cache (`huggingface/`), with model files |
 
 Two requests share a stored result only when every part of its identity

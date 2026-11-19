@@ -243,7 +243,7 @@ class Executor:
         return value
 
     def forget(self) -> None:
-        """Drop results held in memory; stored results stay in the item store."""
+        """Drop results held in memory; stored results stay in the cache."""
         self._memo.clear()
 
 

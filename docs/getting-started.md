@@ -15,15 +15,17 @@ conda environment, or uv configuration already on the machine. Add
 `--compute cpu` on a machine without an NVIDIA GPU. [Settings](settings.md#installation)
 lists every option.
 
-If your lab shares a definitions store, point txtures at it once:
+Everything txtures keeps lives in one directory, the txtures home: its
+definitions, inputs, output tables, cache of computed results, and models.
+If your lab shares a home, point txtures at it once:
 
 ```bash
-txtures site use /path/to/txtures-definitions
+txtures site use /path/to/txtures-home
 ```
 
-Its site settings then choose the shared locations, so you reuse models and
-results that others have computed. Without one, txtures keeps everything in
-your home directory and says so with a note. Check the result:
+You then reuse models and results that others have computed. Without one,
+txtures uses `~/txtures-home` and says so with a note; `txtures site init`
+creates it. Check the result:
 
 ```bash
 txtures site ls
@@ -31,7 +33,7 @@ txtures site ls
 
 This lists every setting, its value, and where the value came from. The
 locations that matter first are `inputs`, where txtures reads your files,
-and `derivatives`, where it writes output tables.
+and `outputs`, where it writes output tables.
 
 ## Compute surprisal
 
@@ -54,7 +56,7 @@ gardenpath: plain-text
 $ txtures plan gardenpath
 input gardenpath: plain-text, 2 documents, 14 regions
 workflow main
-table .../derivatives/gardenpath/main-68ce5fbefa0d (to be written)
+table .../outputs/gardenpath/main-68ce5fbefa0d (to be written)
 resources:
   hf_model 81d9ad54cbc5: missing
 variants:
@@ -72,7 +74,7 @@ $ txtures run gardenpath
 building resource hf_model 81d9ad54cbc5
 lm_scores [main]: computing 2 of 2 items
 lm_scores [main]: 2 computed, 0 reused
-wrote .../derivatives/gardenpath/main-68ce5fbefa0d
+wrote .../outputs/gardenpath/main-68ce5fbefa0d
 ```
 
 The table has one row per region. By default a region is a
@@ -90,12 +92,9 @@ After you edit one line of the input, a run rescores only that document.
 
 ## Choose a model
 
-Models and other scientific parameters live in a definitions store, not on
-the command line. Create one, then add a config and a workflow that uses it:
-
-```bash
-txtures def init
-```
+Models and other scientific parameters live in the home's definitions
+store, `definitions/`, not on the command line. `txtures site init` puts an
+example there; add a config and a workflow that uses it:
 
 ```yaml
 # configs/lm_scores/pythia410m.yml

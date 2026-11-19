@@ -19,12 +19,8 @@ Options:
   --prefix DIR        install into DIR (default: CHECKOUT/txtures-install)
   --compute KIND      PyTorch build: cuda or cpu (default: cuda on Linux,
                       cpu on macOS; later runs keep the recorded choice)
-  --site DIR          use the definitions store DIR, whose site settings
-                      name shared locations; recorded in your personal
-                      settings, as `txtures site use DIR` does
-  --resources DIR     record DIR as this installation's directory of models
-                      and other resources (later runs keep it)
-  --executor KIND     record where computation runs: local or slurm
+  --site DIR          use the txtures home DIR as your site, as
+                      `txtures site use DIR` does
   --bin-dir DIR       where to put the txtures command (default: ~/.local/bin)
   --no-launcher       do not create the txtures command in --bin-dir
   --default           make this installation the one the txtures command runs
@@ -45,8 +41,6 @@ checkout=$(CDPATH= cd "$(dirname "$script")" && pwd -P)
 
 prefix=$checkout/txtures-install
 compute=
-resources=
-executor=
 site=
 bin_dir=$HOME/.local/bin
 launcher=true
@@ -57,8 +51,10 @@ while [ $# -gt 0 ]; do
         --prefix) prefix=${2:?--prefix needs a directory}; shift ;;
         --compute) compute=${2:?--compute needs cuda or cpu}; shift ;;
         --site) site=${2:?--site needs a directory}; shift ;;
-        --resources) resources=${2:?--resources needs a directory}; shift ;;
-        --executor) executor=${2:?--executor needs local or slurm}; shift ;;
+        --resources|--executor)
+            echo "install: $1 was removed; installations hold no settings." >&2
+            echo "install: set it in your site with \`txtures site set\` instead." >&2
+            exit 2 ;;
         --bin-dir) bin_dir=${2:?--bin-dir needs a directory}; shift ;;
         --no-launcher) launcher=false ;;
         --default) make_default=true ;;
@@ -78,7 +74,6 @@ absolute() {
     esac
 }
 if [ -n "$site" ]; then site=$(absolute "$site"); fi
-if [ -n "$resources" ]; then resources=$(absolute "$resources"); fi
 
 mkdir -p "$prefix"
 prefix=$(CDPATH= cd "$prefix" && pwd -P)
@@ -188,8 +183,6 @@ python_version=$(cat "$checkout/.python-version")
 "$uv" sync --frozen --python "$python_version" --extra "$compute" $groups
 
 set -- --prefix "$prefix" --checkout "$checkout" --compute "$compute" --uv-version "$UV_VERSION"
-if [ -n "$resources" ]; then set -- "$@" --resources "$resources"; fi
-if [ -n "$executor" ]; then set -- "$@" --executor "$executor"; fi
 if [ -n "$site" ]; then set -- "$@" --site "$site"; fi
 if [ "$launcher" = true ]; then set -- "$@" --bin-dir "$bin_dir"; fi
 if [ "$make_default" = true ]; then set -- "$@" --default; fi

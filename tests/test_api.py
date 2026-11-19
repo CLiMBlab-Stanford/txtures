@@ -77,7 +77,7 @@ def test_compute_returns_the_table_and_reuses_items(fake_api):
     assert CALLS["fake_scores"] == 2
     tx.compute("fake_feature", ["It fell."], config={"fake_scores": {"scale": 2}})
     assert CALLS["fake_scores"] == 2
-    assert not (fake_api / "derivatives").exists()
+    assert not (fake_api / "outputs").exists()
 
 
 def test_compute_sweeps_and_notes(fake_api):
@@ -120,7 +120,7 @@ def test_compute_uses_the_store_workflow_without_config(fake_api, monkeypatch):
 
 def test_run_writes_the_table_compute_would_return(fake_api):
     table = tx.run("doc", modules=["fake_feature"])
-    assert len(list((fake_api / "derivatives" / "doc").glob("main-*/doc.tsv"))) == 1
+    assert len(list((fake_api / "outputs" / "doc").glob("main-*/doc.tsv"))) == 1
     computed = tx.compute("fake_feature", ["The horse raced.", "It fell."])
     pd.testing.assert_frame_equal(table, computed)
 
@@ -160,9 +160,8 @@ def test_the_api_leaves_the_process_environment_alone(fake_api, monkeypatch):
 
 
 def test_default_locations_warn_once(fake_api, monkeypatch):
-    for key in ("ITEMS", "RESOURCES"):
+    for key in ("CACHE", "RESOURCES", "HOME"):
         monkeypatch.delenv(f"TXTURES_{key}")
-    monkeypatch.delenv("TXTURES_DEFINITIONS")
     monkeypatch.setattr(api, "_warned_defaults", False)
     with pytest.warns(api.DefaultLocationsWarning, match="txtures site use"):
         tx.compute("fake_feature", "a b")

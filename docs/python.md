@@ -64,13 +64,13 @@ table = tx.run("gardenpath", workflow="pythia", modules=["surprisal"])
 
 `tx.run(name, workflow="main", modules=None)` is
 `txtures run NAME --workflow WORKFLOW --module ...`. It computes what is
-missing, writes the output table to the derivatives directory unless it is
+missing, writes the output table to the outputs directory unless it is
 current, and returns the table as read by `tx.read_table`.
 
 ## `tx.read_table`
 
 ```python
-table = tx.read_table("derivatives/gardenpath/main-68ce5fbefa0d")
+table = tx.read_table("outputs/gardenpath/main-68ce5fbefa0d")
 ```
 
 `tx.read_table(path)` reads an output table, given its directory or its
@@ -81,8 +81,8 @@ numbers, with `NA` read as NaN and `Inf` as infinity, or Booleans.
 ## Common options
 
 `tx.compute` and `tx.run` accept keyword arguments that override settings for
-one call: `definitions`, `items`, `resources`, and `device`, and for
-`tx.run` also `inputs` and `derivatives`. `progress`, if given, is called with
+one call: `home`, `definitions`, `cache`, `resources`, and `device`, and
+for `tx.run` also `inputs` and `outputs`. `progress`, if given, is called with
 each progress message, so `progress=print` shows what a long call is doing.
 
 Planning notes, such as an unpinned model revision, and input warnings are
@@ -92,8 +92,8 @@ issued as Python warnings. Invalid input, definitions, or settings raise
 
 ## Settings and the environment
 
-The API reads the same settings as the command line, including your personal
-settings, so `txtures site use` configures both. Software that depends on
+The API reads the same settings as the command line, so `txtures site use`,
+`txtures site set`, and `txtures env set` configure both. Software that depends on
 txtures can instead pass locations as arguments or set the `TXTURES_*`
 environment variables. When every shared location comes from built-in
 defaults, the first call issues a `txtures.api.DefaultLocationsWarning`.

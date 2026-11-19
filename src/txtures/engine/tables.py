@@ -9,7 +9,7 @@ An output table directory, `DERIVATIVES/NAME/WORKFLOW-DIGEST12/`, holds:
 - `manifest.json`: the table's identity, the request that produced it, and
   the resolved config and resources of every variant involved.
 
-Tables are views over the item store. Deleting one loses nothing; running
+Tables are views over the cache. Deleting one loses nothing; running
 the same request again rebuilds it without recomputing stored items.
 """
 
@@ -317,21 +317,21 @@ class TableStatus:
 
 
 def table_statuses(
-    derivatives: Path,
+    outputs: Path,
     replan: Callable[[str, str, Sequence[str] | None], Plan],
     names: Sequence[str] | None = None,
 ) -> list[TableStatus]:
-    """Check every table directory under `derivatives`, or only those of `names`.
+    """Check every table directory under `outputs`, or only those of `names`.
 
     `replan` plans a request from an input name, workflow, and module list, as
     recorded in a table's manifest. A table is current when replanning gives
     its identity, stale when it does not or cannot be replanned, and broken
     when its directory is incomplete.
     """
-    if not derivatives.is_dir():
+    if not outputs.is_dir():
         return []
     statuses = []
-    inputs = [derivatives / name for name in names] if names else sorted(derivatives.iterdir())
+    inputs = [outputs / name for name in names] if names else sorted(outputs.iterdir())
     for input_directory in inputs:
         if not input_directory.is_dir() or input_directory.name.startswith("."):
             continue

@@ -6,6 +6,7 @@ from conftest import write
 
 import txtures
 from txtures.cli import main
+from txtures.settings import SPECS
 
 
 @pytest.fixture(autouse=True)
@@ -13,9 +14,16 @@ def isolated_settings(monkeypatch, tmp_path):
     """Keep CLI tests away from the real home directory and lab storage."""
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "home" / ".config"))
-    for name in ("DEFINITIONS", "INPUTS", "DERIVATIVES", "ITEMS", "RESOURCES"):
-        monkeypatch.delenv(f"TXTURES_{name}", raising=False)
-    monkeypatch.setenv("TXTURES_DEFINITIONS", str(tmp_path / "defs"))
+    for spec in SPECS:
+        monkeypatch.delenv(spec.env, raising=False)
+    monkeypatch.setenv("SHELL", "/bin/bash")
+    monkeypatch.setenv("TXTURES_HOME", str(tmp_path / "txh"))
+
+
+@pytest.fixture
+def txh(tmp_path) -> Path:
+    """The txtures home the CLI tests use."""
+    return tmp_path / "txh"
 
 
 def test_version_flag_reports_package_version(capsys):
@@ -30,22 +38,23 @@ def test_no_arguments_prints_help(capsys):
     assert "usage: txtures" in capsys.readouterr().out
 
 
-def test_site_ls_reports_values_sources_and_meanings(capsys, tmp_path):
-    assert main(["--items", str(tmp_path / "items"), "site", "ls", "--json"]) == 0
+def test_site_ls_reports_values_sources_and_meanings(capsys, tmp_path, txh):
+    assert main(["--cache", str(tmp_path / "c"), "site", "ls", "--json"]) == 0
     payload = json.loads(capsys.readouterr().out)
     assert payload["installation"] is None
+    assert payload["site_settings"] == str(txh / "site.yml")
     rows = {row["key"]: row for row in payload["settings"]}
-    assert rows["items"] == {
-        "key": "items",
-        "value": str(tmp_path / "items"),
+    assert rows["cache"] == {
+        "key": "cache",
+        "value": str(tmp_path / "c"),
         "source": "command line",
-        "description": "store of per-document results",
+        "description": "stored per-document results",
     }
-    assert rows["definitions"]["source"] == "environment (TXTURES_DEFINITIONS)"
+    assert rows["home"]["source"] == "environment (TXTURES_HOME)"
     assert rows["resources"] == {
         "key": "resources",
-        "value": str(tmp_path / "home" / "txtures-resources"),
-        "source": "default",
+        "value": str(txh / "resources"),
+        "source": "home",
         "description": "models and the Hugging Face cache",
     }
     assert main(["site", "show"]) == 0
@@ -53,72 +62,242 @@ def test_site_ls_reports_values_sources_and_meanings(capsys, tmp_path):
     assert "slurm.partition" in out and "partition to submit to" in out
 
 
-def test_site_set_unset_and_use(capsys, tmp_path, monkeypatch):
-    personal = tmp_path / "home" / ".config" / "txtures" / "settings.yml"
+def test_site_init_creates_the_home_layout(capsys, tmp_path, txh):
+    assert main(["site", "init", "--no-git"]) == 0
+    assert f"created txtures home {txh}" in capsys.readouterr().out
+    assert sorted(p.name for p in txh.iterdir()) == [
+        ".gitignore",
+        "README.md",
+        "cache",
+        "definitions",
+        "inputs",
+        "outputs",
+        "resources",
+        "site.yml",
+    ]
+    assert not (txh / ".git").exists()
+    assert main(["def", "validate"]) == 0
+    assert main(["site", "init"]) == 1
+    assert "already exists" in capsys.readouterr().err
+    assert main(["site", "init", "--no-git", str(tmp_path / "other")]) == 0
+    assert f"txtures site use {tmp_path / 'other'}" in capsys.readouterr().err
+
+
+def test_site_set_and_unset_edit_the_site_in_use(capsys, tmp_path, txh):
+    site = txh / "site.yml"
+    txh.mkdir()
     assert main(["site", "set", "slurm.partition", "gpu"]) == 0
     assert main(["site", "set", "slurm.options", "--", "--exclude=n1", "--qos=low"]) == 0
-    assert main(["site", "set", "items", "rel/items"]) == 0
     out = capsys.readouterr().out
-    assert f"items is now {Path.cwd() / 'rel' / 'items'} (personal settings" in out
-    assert "slurm:\n  partition: gpu\n  options:\n  - --exclude=n1\n" in personal.read_text()
+    assert f"wrote {site}" in out
+    assert f"slurm.partition is now gpu (site settings ({site}))" in out
+    assert "slurm:\n  partition: gpu\n  options:\n  - --exclude=n1\n" in site.read_text()
+    assert not (tmp_path / "home" / ".config" / "txtures").exists()
 
     assert main(["site", "set", "slurm.gpus", "-1"]) == 1
     assert "non-negative integer" in capsys.readouterr().err
     assert main(["site", "set", "colour", "blue"]) == 1
     assert "see `txtures site ls`" in capsys.readouterr().err
+    assert main(["site", "set", "home", "/x"]) == 1
+    assert "txtures site use PATH" in capsys.readouterr().err
+    assert main(["site", "set", "cache=/x"]) == 1
+    err = capsys.readouterr().err
+    assert "cache is always HOME/cache" in err and "txtures env set cache=PATH" in err
+    assert main(["site", "set", "items=/x"]) == 1
+    assert "'items' is now called 'cache'" in capsys.readouterr().err
 
-    assert main(["site", "unset", "slurm.partition"]) == 0
-    assert "slurm.partition is now (unset) (default)" in capsys.readouterr().out
-    assert "partition" not in personal.read_text()
-
-    # The environment outranks personal settings, and the command says so.
-    assert main(["site", "set", "definitions", str(tmp_path)]) == 0
-    assert "TXTURES_DEFINITIONS" in capsys.readouterr().err
-
-    monkeypatch.delenv("TXTURES_DEFINITIONS")
-    assert main(["site", "unset", "items"]) == 0
-    store = tmp_path / "lab-definitions"
-    write(store / "site" / "site.yml", f"items: {tmp_path / 'lab' / 'items'}\n")
-    assert main(["site", "use", str(store)]) == 0
+    assert main(["site", "unset", "slurm.partition", "slurm.cpus"]) == 0
     out = capsys.readouterr().out
-    assert f"items: {tmp_path / 'lab' / 'items'} (site settings" in out
+    assert "slurm.partition is now (unset) (default)" in out
+    assert "slurm.cpus is not set in" in out
+    assert "partition" not in site.read_text()
+
+
+def test_site_set_needs_an_existing_home(capsys):
+    assert main(["site", "set", "slurm.cpus=2"]) == 1
+    assert "does not exist; create it with `txtures site init`" in capsys.readouterr().err
+
+
+def test_site_settings_cannot_hold_locations(capsys, txh):
+    write(txh / "site.yml", "inputs: /x\n")
+    assert main(["status"]) == 1
+    assert "'inputs' cannot be a site setting" in capsys.readouterr().err
+
+
+def test_site_set_takes_several_key_value_pairs(capsys, txh):
+    site = txh / "site.yml"
+    txh.mkdir()
+    args = ["slurm.partition=gpu", "slurm.account=lab", "slurm.options=--exclude=n1"]
+    assert main(["site", "set", *args, "slurm.options=--qos=low"]) == 0
+    out = capsys.readouterr().out
+    assert "slurm.partition is now gpu" in out and "slurm.account is now lab" in out
+    text = site.read_text()
+    assert "partition: gpu" in text and "account: lab" in text
+    assert "options:\n  - --exclude=n1\n  - --qos=low\n" in text
+
+    # One invalid pair writes nothing.
+    assert main(["site", "set", "slurm.partition=cpu", "slurm.gpus=-1"]) == 1
+    assert "non-negative integer" in capsys.readouterr().err
+    assert site.read_text() == text
+    assert main(["site", "set", "slurm.partition=a", "slurm.partition=b"]) == 1
+    assert "slurm.partition is given more than once" in capsys.readouterr().err
+    assert main(["site", "set", "slurm.partition=a", "gpu"]) == 1
+    assert "expected KEY=VALUE, got 'gpu'" in capsys.readouterr().err
+    assert main(["site", "set", "slurm.partition"]) == 1
+    assert "give a value for slurm.partition" in capsys.readouterr().err
+
+
+def test_env_set_ls_and_unset_edit_the_shell_startup_file(capsys, tmp_path, txh, monkeypatch):
+    bashrc = write(tmp_path / "home" / ".bashrc", "alias ll='ls -l'\n")
+    txh.mkdir()
+    assert main(["site", "set", "slurm.partition=gpu"]) == 0
+    capsys.readouterr()
+
+    args = ["slurm.partition=debug", "slurm.options=--qos=low", "slurm.options=--exclude=n 1"]
+    assert main(["env", "set", *args, "cache=rel"]) == 0
+    captured = capsys.readouterr()
+    assert f"to {bashrc}" in captured.out
+    assert "slurm.partition will be debug (environment (TXTURES_SLURM_PARTITION))" in captured.out
+    assert f"source {bashrc}" in captured.err
+    text = bashrc.read_text()
+    assert text.startswith("alias ll='ls -l'\n\n# >>> txtures env >>>\n")
+    assert "export TXTURES_SLURM_PARTITION=debug\n" in text
+    assert f"export TXTURES_CACHE={Path.cwd() / 'rel'}\n" in text
+    assert "export TXTURES_SLURM_OPTIONS='--qos=low '\"'\"'--exclude=n 1'\"'\"''\n" in text
+    assert (txh / "site.yml").read_text().count("gpu") == 1
+
+    assert main(["env", "ls", "--json"]) == 0
+    rows = {row["key"]: row for row in json.loads(capsys.readouterr().out)["variables"]}
+    assert rows["slurm.partition"]["status"] == "not in this shell yet"
+
+    # A shell that sources the file sees the variables, which override the site.
+    monkeypatch.setenv("TXTURES_SLURM_PARTITION", "debug")
+    monkeypatch.setenv("TXTURES_SLURM_OPTIONS", "--qos=low '--exclude=n 1'")
+    assert main(["site", "ls", "--json"]) == 0
+    rows = {row["key"]: row for row in json.loads(capsys.readouterr().out)["settings"]}
+    assert rows["slurm.partition"]["value"] == "debug"
+    assert rows["slurm.options"]["value"] == ["--qos=low", "--exclude=n 1"]
+    assert main(["env", "ls"]) == 0
+    out = capsys.readouterr().out
+    assert "TXTURES_SLURM_PARTITION  debug  (slurm.partition; in effect)" in out
+    assert "TXTURES_HOME" in out and "not by txtures env" in out
+
+    assert main(["env", "unset", "slurm.partition", "slurm.cpus"]) == 0
+    out = capsys.readouterr().out
+    assert "removed TXTURES_SLURM_PARTITION" in out
+    assert "TXTURES_SLURM_CPUS is not set" in out
+    assert "slurm.partition will be gpu (site settings" in out
+    assert main(["env", "unset", "slurm.options", "cache"]) == 0
+    assert bashrc.read_text() == "alias ll='ls -l'\n"
+
+    assert main(["env", "set", "slurm.gpus=-1"]) == 1
+    assert "non-negative integer" in capsys.readouterr().err
+    assert bashrc.read_text() == "alias ll='ls -l'\n"
+
+
+def test_env_writes_the_file_given_and_takes_locations(capsys, tmp_path):
+    profile = tmp_path / "profile"
+    assert main(["env", "set", "--file", str(profile), "definitions=/lab/defs"]) == 0
+    assert "export TXTURES_DEFINITIONS=/lab/defs\n" in profile.read_text()
+    assert "definitions will be /lab/defs" in capsys.readouterr().out
+
+
+def test_old_environment_variables_are_refused(capsys, monkeypatch):
+    monkeypatch.setenv("TXTURES_ITEMS", "/x")
+    assert main(["status"]) == 1
+    assert "TXTURES_ITEMS is now called TXTURES_CACHE" in capsys.readouterr().err
+
+
+def test_site_use_chooses_the_home_and_the_environment_still_overrides(
+    capsys, tmp_path, monkeypatch
+):
+    lab = tmp_path / "lab"
+    write(lab / "site.yml", "slurm:\n  partition: lab\n")
+    (lab / "definitions").mkdir()
+    assert main(["site", "use", str(lab)]) == 0
+    captured = capsys.readouterr()
+    assert "TXTURES_HOME" in captured.err  # overrides what was written
+    pointer = tmp_path / "home" / ".config" / "txtures" / "home-path"
+    assert pointer.read_text() == f"{lab}\n"
+
+    monkeypatch.delenv("TXTURES_HOME")
+    monkeypatch.setenv("TXTURES_CACHE", str(tmp_path / "mine"))
+    assert main(["site", "use", str(lab)]) == 0
+    out = capsys.readouterr().out
+    assert f"home is now {lab} (home-path ({pointer}))" in out
+    assert f"  definitions: {lab / 'definitions'} (home)" in out
+    assert f"  cache: {tmp_path / 'mine'} (environment (TXTURES_CACHE))" in out
     assert main(["site", "use", str(tmp_path / "missing")]) == 1
+    assert "txtures site init PATH" in capsys.readouterr().err
+
+
+def test_settings_of_earlier_versions_block_runs_until_moved(capsys, tmp_path, monkeypatch):
+    monkeypatch.delenv("TXTURES_HOME")
+    lab = tmp_path / "lab"
+    (lab / "definitions").mkdir(parents=True)
+    write(lab / "definitions" / "site" / "site.yml", "slurm:\n  cpus: 2\n")
+    personal = tmp_path / "home" / ".config" / "txtures" / "settings.yml"
+    write(
+        personal,
+        f"definitions: {lab / 'definitions'}\nitems: {lab / 'items'}\nslurm:\n  account: a\n",
+    )
+    assert main(["status"]) == 1
+    err = capsys.readouterr().err
+    assert "are from an earlier txtures" in err
+    assert f"1. move or symlink {lab / 'items'} to {lab / 'cache'}" in err
+    assert f"2. txtures site use {lab}  (this also removes {personal})" in err
+    assert "3. txtures site set slurm.cpus=2 slurm.account=a" in err
+    assert f"4. remove {lab / 'definitions' / 'site'}" in err
+
+    assert main(["site", "use", str(lab)]) == 0
+    assert "from an earlier txtures" in capsys.readouterr().err
+    assert not personal.exists()
+    assert main(["site", "set", "slurm.account=a", "slurm.cpus=2"]) == 0
+    assert "warning:" in capsys.readouterr().err
+    assert main(["status"]) == 1  # the old site document remains
+    (lab / "definitions" / "site" / "site.yml").unlink()
+    (lab / "definitions" / "site").rmdir()
+    assert main(["status"]) == 0
 
 
 def test_default_locations_draw_one_note(capsys, monkeypatch, tmp_path):
     from txtures import cli
 
-    monkeypatch.delenv("TXTURES_DEFINITIONS")
+    monkeypatch.delenv("TXTURES_HOME")
     monkeypatch.setattr(cli, "_noted", False)
-    (tmp_path / "home" / "txtures-store" / "inputs").mkdir(parents=True)
+    (tmp_path / "home" / "txtures-home" / "inputs").mkdir(parents=True)
     assert main(["status"]) == 0
     err = capsys.readouterr().err
     assert err.count("txtures site use") == 1
-    assert main(["site", "set", "items", str(tmp_path / "items")]) == 0
+    assert main(["site", "use", str(tmp_path / "home" / "txtures-home")]) == 0
     monkeypatch.setattr(cli, "_noted", False)
     assert main(["status"]) == 0
     assert "site use" not in capsys.readouterr().err
 
 
 def test_def_init_then_validate(capsys, tmp_path):
-    assert main(["def", "init"]) == 0
-    assert (tmp_path / "defs" / "site" / "site.yml").is_file()
-    assert main(["def", "validate"]) == 0
+    store = tmp_path / "standalone"
+    assert main(["def", "init", "--no-git", str(store)]) == 0
+    assert "created definitions store" in capsys.readouterr().out
+    assert sorted(p.name for p in store.iterdir()) == ["README.md", "configs", "workflows"]
+    assert main(["def", "validate", str(store)]) == 0
     assert "is valid" in capsys.readouterr().out
 
 
-def test_def_validate_reports_problems_and_fails(capsys, tmp_path):
-    write(tmp_path / "defs" / "workflows" / "w.yml", "lm_scores: nothere\n")
-    assert main(["def", "validate", "--json"]) == 1
+def test_def_validate_reports_problems_and_fails(capsys, txh):
+    write(txh / "definitions" / "workflows" / "w.yml", "lm_scores: nothere\n")
+    write(txh / "definitions" / "site" / "site.yml", "")
+    assert main(["def", "validate", "--json", str(txh / "definitions")]) == 1
     payload = json.loads(capsys.readouterr().out)
     assert payload["valid"] is False
-    assert any("nothere" in problem["message"] for problem in payload["problems"])
+    messages = [problem["message"] for problem in payload["problems"]]
+    assert any("nothere" in message for message in messages)
+    assert any("site settings now live in the txtures home" in message for message in messages)
 
 
-def test_def_validate_uses_the_stores_variant_limit(capsys, tmp_path):
-    defs = tmp_path / "defs"
-    write(defs / "site" / "site.yml", "execution:\n  max_variants: 1\n")
-    write(defs / "configs" / "lm_scores" / "main.yml", "model: [a, b]\n")
+def test_def_validate_uses_the_sites_variant_limit(capsys, txh):
+    write(txh / "site.yml", "execution:\n  max_variants: 1\n")
+    write(txh / "definitions" / "configs" / "lm_scores" / "main.yml", "model: [a, b]\n")
     assert main(["def", "validate"]) == 1
     assert "more than execution.max_variants (1)" in capsys.readouterr().out
 
@@ -177,7 +356,7 @@ def fake_engine(monkeypatch, tmp_path):
     monkeypatch.setattr(
         api, "load_definitions", lambda settings: Definitions.packaged(fake_modules.registry())
     )
-    for key in ("inputs", "derivatives", "resources", "items"):
+    for key in ("inputs", "outputs", "resources", "cache"):
         monkeypatch.setenv(f"TXTURES_{key.upper()}", str(tmp_path / key))
     write(tmp_path / "inputs" / "doc.txt", "The horse raced.\nIt fell.\n")
     yield tmp_path

@@ -11,9 +11,10 @@ import warnings
 from collections.abc import Sequence
 from pathlib import Path
 
-from txtures import __version__, api, environment, installation
+from txtures import __version__, api, environment, installation, shellenv
 from txtures.corpus import SEGMENT_LEVELS
 from txtures.definitions import Definitions, init_store
+from txtures.definitions.store import init_home
 from txtures.engine import (
     Executor,
     TableStatus,
@@ -28,23 +29,27 @@ from txtures.engine import slurm as slurm_jobs
 from txtures.errors import Problem, SettingsError, TxturesError
 from txtures.inputs import InputReport, load_input, read_input, scan_inputs
 from txtures.settings import (
+    LOCATION_KEYS,
     SITE_DOCUMENT,
     SPECS,
     Settings,
-    personal_settings_path,
+    home_path_file,
+    legacy_settings_path,
     resolve_settings,
-    set_personal,
-    unset_personal,
+    set_site,
+    unset_site,
+    use_site,
     uses_default_locations,
 )
 from txtures.store import EntryStore
 
 PATH_FLAGS = {
+    "home": "txtures home",
     "definitions": "definitions store",
     "inputs": "inputs directory",
-    "derivatives": "derivatives directory",
-    "items": "item-intermediate store",
-    "resources": "shared resources directory",
+    "outputs": "outputs directory",
+    "cache": "cache directory",
+    "resources": "resources directory",
 }
 
 
@@ -72,27 +77,83 @@ def build_parser() -> argparse.ArgumentParser:
     listing.add_argument("--json", action="store_true", help="print JSON")
     listing.set_defaults(handler=site_ls)
     use = site_commands.add_parser(
-        "use", help="use a definitions store, whose site settings name shared locations"
+        "use", help="use a txtures home as your site, for every txtures you run"
     )
-    use.add_argument("path", type=Path, help="the definitions store")
+    use.add_argument("path", type=Path, help="the txtures home")
     use.set_defaults(handler=site_use)
-    setter = site_commands.add_parser("set", help="set one setting in your personal settings")
-    setter.add_argument("key", help="setting key, such as items or slurm.partition")
-    setter.add_argument(
-        "values", nargs="+", metavar="VALUE", help="the value; several for slurm.options"
+    init = site_commands.add_parser(
+        "init", help="create a txtures home, as a Git repository unless --no-git"
     )
+    init.add_argument("path", nargs="?", type=Path, help="home to create (default: your home)")
+    init.add_argument(
+        "--no-git", action="store_false", dest="git", help="do not make the home a Git repository"
+    )
+    init.set_defaults(handler=site_init)
+    setter = site_commands.add_parser(
+        "set",
+        help="set settings in your site",
+        usage="%(prog)s [-h] KEY=VALUE [KEY=VALUE ...]\n       %(prog)s [-h] KEY VALUE [VALUE ...]",
+        description="Set settings in site.yml of your txtures home, as "
+        "KEY=VALUE pairs, such as slurm.partition=gpu "
+        "slurm.account=mylab, or set one setting as KEY VALUE. A list setting such as "
+        "slurm.options takes several values: repeat its KEY=VALUE pair, or list them after KEY.",
+    )
+    setter.add_argument("words", nargs="+", metavar="KEY=VALUE", help="a setting and its value")
     setter.set_defaults(handler=site_set)
-    unsetter = site_commands.add_parser(
-        "unset", help="remove one setting from your personal settings"
-    )
-    unsetter.add_argument("key", help="setting key")
+    unsetter = site_commands.add_parser("unset", help="remove settings from your site")
+    unsetter.add_argument("keys", nargs="+", metavar="KEY", help="setting key")
     unsetter.set_defaults(handler=site_unset)
 
-    definitions = commands.add_parser("def", help="create and validate definitions stores")
+    shell_file = argparse.ArgumentParser(add_help=False)
+    shell_file.add_argument(
+        "--file",
+        type=Path,
+        metavar="PATH",
+        help="the shell startup file; default ~/.zshrc, ~/.bashrc, or ~/.profile by $SHELL",
+    )
+    env = commands.add_parser(
+        "env",
+        help="override site settings with environment variables in your shell startup file",
+        description="Keep environment variables that override your site, such as "
+        "TXTURES_SLURM_PARTITION for slurm.partition, in a marked block of your shell "
+        "startup file. Changes apply to shells started afterwards.",
+    )
+    env_commands = env.add_subparsers(dest="env_command", metavar="COMMAND", required=True)
+    listing = env_commands.add_parser(
+        "ls",
+        aliases=["show"],
+        parents=[shell_file],
+        help="list the variables in your shell startup file",
+    )
+    listing.add_argument("--json", action="store_true", help="print JSON")
+    listing.set_defaults(handler=env_ls)
+    setter = env_commands.add_parser(
+        "set",
+        parents=[shell_file],
+        help="set variables for settings in your shell startup file",
+        usage="%(prog)s [-h] [--file PATH] KEY=VALUE [KEY=VALUE ...]\n"
+        "       %(prog)s [-h] [--file PATH] KEY VALUE [VALUE ...]",
+        description="Set the environment variables of settings, given as for "
+        "`txtures site set`, in your shell startup file.",
+    )
+    setter.add_argument("words", nargs="+", metavar="KEY=VALUE", help="a setting and its value")
+    setter.set_defaults(handler=env_set)
+    unsetter = env_commands.add_parser(
+        "unset", parents=[shell_file], help="remove variables from your shell startup file"
+    )
+    unsetter.add_argument("keys", nargs="+", metavar="KEY", help="setting key")
+    unsetter.set_defaults(handler=env_unset)
+
+    definitions = commands.add_parser("def", help="validate and create definitions stores")
     def_commands = definitions.add_subparsers(dest="def_command", metavar="COMMAND", required=True)
-    init = def_commands.add_parser("init", help="create a definitions store")
+    init = def_commands.add_parser(
+        "init",
+        help="create a definitions store of its own, as a Git repository unless --no-git; "
+        "`txtures site init` makes a home with one",
+    )
+    init.add_argument("path", type=Path, help="store to create")
     init.add_argument(
-        "path", nargs="?", type=Path, help="store to create (default: selected store)"
+        "--no-git", action="store_false", dest="git", help="do not make the store a Git repository"
     )
     init.set_defaults(handler=def_init)
     validate = def_commands.add_parser("validate", help="check every definition in a store")
@@ -133,7 +194,7 @@ def build_parser() -> argparse.ArgumentParser:
             sub.add_argument(
                 "--local",
                 action="store_true",
-                help="compute here even when the installation submits to Slurm",
+                help="compute here even when the site submits to Slurm",
             )
             sub.add_argument(
                 "--workers",
@@ -171,16 +232,24 @@ def build_parser() -> argparse.ArgumentParser:
 _noted = False
 
 
-def _settings(args: argparse.Namespace, *, note: bool = True, **overrides: object) -> Settings:
+def _settings(
+    args: argparse.Namespace,
+    *,
+    note: bool = True,
+    tolerate_stale: bool = False,
+    **overrides: object,
+) -> Settings:
     """Resolve settings and set the process environment that txtures controls.
 
-    With `note`, prints the default-locations notice when it applies.
+    With `note`, prints the default-locations notice when it applies. With
+    `tolerate_stale`, as the `site` commands use, settings left by earlier
+    versions are ignored instead of refused.
     """
     flags = {key: getattr(args, key) for key in PATH_FLAGS}
     flags.update({key: value for key, value in overrides.items() if value is not None})
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", api.DefaultLocationsWarning)
-        settings = api.settings(flags)
+        settings = api.settings(flags, tolerate_stale=tolerate_stale)
     environment.apply(settings)
     global _noted
     if note and not _noted and uses_default_locations(settings):
@@ -201,16 +270,28 @@ def _json_value(value: object) -> object:
     return str(value) if isinstance(value, Path) else value
 
 
+def _site_settings(args: argparse.Namespace) -> Settings:
+    """Resolve settings for a `site` command, warning about settings left by earlier versions."""
+    settings = _settings(args, note=False, tolerate_stale=True)
+    if settings.legacy is not None:
+        print(f"warning: {settings.legacy.message()}", file=sys.stderr)
+    installed = installation.current()
+    if installed is not None and installed.settings:
+        print(f"warning: ignoring them: {installation.stale_message(installed)}", file=sys.stderr)
+    return settings
+
+
 def site_ls(args: argparse.Namespace) -> int:
     """Print the installation and every setting with its value, source, and meaning."""
-    settings = _settings(args, note=False)
+    settings = _site_settings(args)
     installed = installation.current()
     if args.json:
         payload = {
             "installation": None
             if installed is None
             else {"prefix": str(installed.prefix), "compute": installed.compute},
-            "personal_settings": str(personal_settings_path(os.environ, Path.home())),
+            "home_path": str(home_path_file(os.environ, Path.home())),
+            "site_settings": str(settings.site_document),
             "settings": [
                 {
                     "key": spec.key,
@@ -227,7 +308,8 @@ def site_ls(args: argparse.Namespace) -> int:
         print("installation: none (running outside an ./install environment)")
     else:
         print(f"installation: {installed.prefix} ({installed.compute})")
-    print(f"personal settings: {personal_settings_path(os.environ, Path.home())}")
+    print(f"home-path file: {home_path_file(os.environ, Path.home())}")
+    print(f"site settings: {settings.site_document}")
     rows = [(spec, _show(settings.values[spec.key].value)) for spec in SPECS]
     key_width = max(len(spec.key) for spec, _ in rows)
     value_width = max(len(value) for _, value in rows)
@@ -240,44 +322,186 @@ def site_ls(args: argparse.Namespace) -> int:
     return 0
 
 
-def _report_setting(args: argparse.Namespace, key: str, written: Path) -> None:
+def _report_setting(settings: Settings, key: str, written: Path) -> None:
     """Print where `key` now comes from, noting a source that overrides `written`."""
-    setting = _settings(args, note=False).values[key]
+    setting = settings.values[key]
     print(f"{key} is now {_show(setting.value)} ({setting.source})")
-    if not setting.source.startswith("personal settings") and setting.source != "default":
+    if str(written) not in setting.source and setting.source != "default":
         print(f"note: {setting.source} overrides {written} for {key}", file=sys.stderr)
 
 
 def site_use(args: argparse.Namespace) -> int:
-    """Point personal settings at a definitions store, whose site settings name the rest."""
-    store = args.path.expanduser().absolute()
-    if not store.is_dir():
-        raise TxturesError(f"{store} is not a directory; give the path of a definitions store")
-    path = set_personal("definitions", [str(store)])
-    print(f"set definitions to {store} in {path}")
-    if not (store / SITE_DOCUMENT).is_file():
-        print(f"note: {store} has no {SITE_DOCUMENT}, so it sets no shared locations")
-    settings = _settings(args, note=False)
-    _report_setting(args, "definitions", path)
-    for key in ("items", "resources", "inputs", "derivatives"):
+    """Choose a txtures home as the user's site, whose settings then apply."""
+    home = args.path.expanduser().absolute()
+    if not home.is_dir():
+        raise TxturesError(
+            f"{home} is not a directory; give the path of a txtures home, "
+            "or create one with `txtures site init PATH`"
+        )
+    path, legacy = use_site(home)
+    print(f"set home to {home} in {path}")
+    if legacy is not None:
+        print(
+            f"note: removed {legacy_settings_path(os.environ, Path.home())}, from an earlier "
+            "txtures",
+            file=sys.stderr,
+        )
+    missing = [name for name in (SITE_DOCUMENT, "definitions") if not (home / name).exists()]
+    if missing:
+        print(f"note: {home} has no {' or '.join(missing)}; `txtures site init` makes a full home")
+    settings = _settings(args, note=False, tolerate_stale=True)
+    _report_setting(settings, "home", path)
+    for key in LOCATION_KEYS:
         setting = settings.values[key]
         print(f"  {key}: {setting.value} ({setting.source})")
     return 0
 
 
+def site_init(args: argparse.Namespace) -> int:
+    """Create a txtures home at the given location or the current one."""
+    settings = _settings(args, note=False, tolerate_stale=True)
+    path = args.path.expanduser().absolute() if args.path else settings.home
+    note = init_home(path, git=args.git)
+    print(
+        f"created txtures home {path}" + (" as a Git repository" if args.git and not note else "")
+    )
+    if note:
+        print(f"note: {note}", file=sys.stderr)
+    if path != settings.home:
+        print(f"note: to use it, run `txtures site use {path}`", file=sys.stderr)
+    return 0
+
+
+def _assignments(words: Sequence[str]) -> list[tuple[str, list[str]]]:
+    """Read `site set` arguments: KEY=VALUE pairs, or one KEY followed by its values.
+
+    Keys never contain `=`, so the first word decides the form.
+
+    Raises:
+        SettingsError: The arguments fit neither form.
+    """
+    if "=" not in words[0]:
+        if len(words) < 2:
+            raise SettingsError(f"give a value for {words[0]}, as {words[0]}=VALUE")
+        return [(words[0], list(words[1:]))]
+    assignments = []
+    for word in words:
+        key, equals, value = word.partition("=")
+        if not equals or not key:
+            raise SettingsError(f"expected KEY=VALUE, got {word!r}")
+        assignments.append((key, [value]))
+    return assignments
+
+
 def site_set(args: argparse.Namespace) -> int:
-    """Set one setting in personal settings."""
-    path = set_personal(args.key, args.values)
-    _report_setting(args, args.key, path)
+    """Set settings in the site's settings, all at once."""
+    assignments = _assignments(args.words)
+    path = set_site(_site_settings(args).home, assignments)
+    print(f"wrote {path}")
+    settings = _settings(args, note=False, tolerate_stale=True)
+    for key in dict.fromkeys(key for key, _ in assignments):
+        _report_setting(settings, key, path)
     return 0
 
 
 def site_unset(args: argparse.Namespace) -> int:
-    """Remove one setting from personal settings."""
-    path, removed = unset_personal(args.key)
-    if not removed:
-        print(f"{args.key} is not set in {path}")
-    _report_setting(args, args.key, path)
+    """Remove settings from the site's settings."""
+    path, removed = unset_site(_site_settings(args).home, args.keys)
+    if removed:
+        print(f"wrote {path}")
+    settings = _settings(args, note=False, tolerate_stale=True)
+    for key in dict.fromkeys(args.keys):
+        if key not in removed:
+            print(f"{key} is not set in {path}")
+        _report_setting(settings, key, path)
+    return 0
+
+
+def _shell_file(args: argparse.Namespace) -> Path:
+    return args.file.expanduser().absolute() if args.file else shellenv.shell_config_path()
+
+
+def env_ls(args: argparse.Namespace) -> int:
+    """List the variables in the shell startup file and whether this shell has them."""
+    path = _shell_file(args)
+    variables = shellenv.read_env(path)
+    rows = []
+    for spec in SPECS:
+        written = variables.get(spec.env)
+        current = os.environ.get(spec.env)
+        if written is None and current is None:
+            continue
+        if written is None:
+            status = "set in this shell, not by txtures env"
+        elif current == written:
+            status = "in effect"
+        elif current is None:
+            status = "not in this shell yet"
+        else:
+            status = f"this shell has {current!r} instead"
+        rows.append((spec, written, current, status))
+    if args.json:
+        payload = {
+            "file": str(path),
+            "variables": [
+                {
+                    "key": spec.key,
+                    "variable": spec.env,
+                    "written": written,
+                    "current": current,
+                    "status": status,
+                }
+                for spec, written, current, status in rows
+            ],
+        }
+        print(json.dumps(payload, indent=2))
+        return 0
+    print(f"shell startup file: {path}")
+    if not rows:
+        print("no txtures variables are set")
+        return 0
+    name_width = max(len(spec.env) for spec, *_ in rows)
+    for spec, written, current, status in rows:
+        value = written if written is not None else current
+        print(f"{spec.env:<{name_width}}  {value}  ({spec.key}; {status})")
+    if any(status == "not in this shell yet" or "instead" in status for *_, status in rows):
+        print(f"\nnote: run `source {path}` or start a new shell to apply them")
+    return 0
+
+
+def _report_env(args: argparse.Namespace, path: Path, keys: Sequence[str], env) -> None:
+    """Print where each of `keys` will come from in a shell that sources `path`."""
+    settings = resolve_settings(
+        {key: getattr(args, key) for key in PATH_FLAGS}, env=env, tolerate_stale=True
+    )
+    for key in dict.fromkeys(keys):
+        setting = settings.values[key]
+        print(f"{key} will be {_show(setting.value)} ({setting.source})")
+    print(f"note: run `source {path}` or start a new shell to apply this", file=sys.stderr)
+
+
+def env_set(args: argparse.Namespace) -> int:
+    """Set the variables of settings in the shell startup file, all at once."""
+    assignments = _assignments(args.words)
+    path = _shell_file(args)
+    written = shellenv.set_env(path, assignments)
+    print(f"wrote {', '.join(written)} to {path}")
+    _report_env(args, path, [key for key, _ in assignments], {**os.environ, **written})
+    return 0
+
+
+def env_unset(args: argparse.Namespace) -> int:
+    """Remove the variables of settings from the shell startup file."""
+    path = _shell_file(args)
+    removed = shellenv.unset_env(path, args.keys)
+    if removed:
+        print(f"removed {', '.join(removed)} from {path}")
+    names = {spec.key: spec.env for spec in SPECS}
+    for key in dict.fromkeys(args.keys):
+        if names[key] not in removed:
+            print(f"{names[key]} is not set in {path}")
+    env = {name: value for name, value in os.environ.items() if name not in removed}
+    _report_env(args, path, args.keys, env)
     return 0
 
 
@@ -337,10 +561,15 @@ def hf_whoami(args: argparse.Namespace) -> int:
 
 
 def def_init(args: argparse.Namespace) -> int:
-    """Create a definitions store at the given or selected location."""
-    path = args.path.resolve() if args.path else _settings(args).definitions
-    init_store(path)
-    print(f"created definitions store {path}")
+    """Create a definitions store of its own."""
+    path = args.path.expanduser().absolute()
+    note = init_store(path, git=args.git)
+    print(
+        f"created definitions store {path}"
+        + (" as a Git repository" if args.git and not note else "")
+    )
+    if note:
+        print(f"note: {note}", file=sys.stderr)
     return 0
 
 
@@ -458,7 +687,7 @@ def inputs_check(args: argparse.Namespace) -> int:
 
 
 def _stores(settings: Settings) -> tuple[EntryStore, EntryStore]:
-    return EntryStore(settings.items), EntryStore(settings.resource_store)
+    return EntryStore(settings.cache), EntryStore(settings.resource_store)
 
 
 def _plan(args: argparse.Namespace):
@@ -569,7 +798,7 @@ def _submit(args: argparse.Namespace, settings: Settings, plan) -> int:
     if workers < 1:
         raise TxturesError("--workers must be at least 1")
     slurm = _slurm()
-    existing = slurm_jobs.read_job(slurm_jobs.job_directory(settings.derivatives, plan))
+    existing = slurm_jobs.read_job(slurm_jobs.job_directory(settings.outputs, plan))
     if existing is not None:
         states = slurm.states(existing.job_id)
         if slurm_jobs.is_active(states):
@@ -637,12 +866,12 @@ def _report_run(plan, executor: Executor, directory: Path, written: bool) -> int
 def _table_statuses(args: argparse.Namespace, names) -> list[TableStatus]:
     settings = _settings(args)
     definitions = api.load_definitions(settings)
-    return table_statuses(settings.derivatives, replanner(settings, definitions), names)
+    return table_statuses(settings.outputs, replanner(settings, definitions), names)
 
 
 def _job_rows(settings: Settings, names) -> list[tuple[slurm_jobs.Job, dict[str, str], str]]:
     """Each recorded job with its task states and a one-line description."""
-    found = slurm_jobs.jobs(settings.derivatives, names)
+    found = slurm_jobs.jobs(settings.outputs, names)
     if not found:
         return []
     slurm = _slurm()

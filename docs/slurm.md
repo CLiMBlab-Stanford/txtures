@@ -1,19 +1,22 @@
 # Slurm
 
 When `execution.executor` is `slurm`, `txtures run` submits its computation
-as a Slurm job array and returns once the job is queued. Choose this at
-installation with `./install --executor slurm`, or set it in personal or site
-settings.
+as a Slurm job array and returns once the job is queued. Choose it in your
+site with `txtures site set execution.executor=slurm`; `txtures run --local`
+then computes one request here instead.
 
 ## Settings
 
 Set at least the partition, and the account if the cluster requires one,
-in your personal settings or the lab's site settings:
+in your site:
 
 ```bash
-txtures site set slurm.partition gpu
-txtures site set slurm.account mylab
+txtures site set slurm.partition=gpu slurm.account=mylab
 ```
+
+To use another partition or account yourself without changing a shared
+site, use `txtures env set slurm.partition=NAME` (see
+[Departing from your site](settings.md#departing-from-your-site)).
 
 | Key | Default | Meaning |
 | --- | --- | --- |
@@ -30,8 +33,8 @@ txtures site set slurm.account mylab
 
 ```console
 $ txtures run stimuli --workers 4
-submitted job 81234 (4 tasks) to write .../derivatives/stimuli/main-3f9a0c1d2e4b
-logs: .../derivatives/.txtures-jobs/stimuli/main-3f9a0c1d2e4b/logs; check progress with `txtures status`
+submitted job 81234 (4 tasks) to write .../outputs/stimuli/main-3f9a0c1d2e4b
+logs: .../outputs/.txtures-jobs/stimuli/main-3f9a0c1d2e4b/logs; check progress with `txtures status`
 ```
 
 `--workers N` overrides `slurm.workers` for one run, and `--local` computes
@@ -55,10 +58,10 @@ Run `txtures run` again to submit the new request.
 ## Following a job
 
 `txtures status` lists each recorded job with its task states and log
-directory, under `DERIVATIVES/.txtures-jobs/`. Task states come from
+directory, under `OUTPUTS/.txtures-jobs/`. Task states come from
 `sacct`, or from `squeue` where accounting is unavailable. `txtures gc`
 removes the records and logs of jobs with no active tasks.
 
 The job runs the same installation that submitted it, so the installation,
-the stores, and the derivatives directory must be on storage that compute
+and the txtures home must be on storage that compute
 nodes can reach.
