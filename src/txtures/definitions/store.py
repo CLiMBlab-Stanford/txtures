@@ -195,7 +195,17 @@ Everything txtures keeps lives here:
 
 Each user chooses this home once with `txtures site use PATH`. A directory
 can live elsewhere as a symbolic link. Git tracks `site.yml` and
-`definitions/`; `.gitignore` leaves out the data directories.
+`definitions/` only; `.gitignore` leaves out everything else.
+"""
+
+HOME_GITIGNORE = """\
+# Track only the site settings and the definitions; everything else in the
+# home is data that txtures writes, or kept here for convenience.
+/*
+!/.gitignore
+!/README.md
+!/site.yml
+!/definitions/
 """
 
 DEFINITIONS_FILES = {
@@ -209,24 +219,16 @@ def init_store(root: Path, *, git: bool = True) -> str | None:
     """Create a definitions store at `root` with examples.
 
     A txtures home made by `init_home` already holds one; this makes a store
-    of its own, for use with `TXTURES_DEFINITIONS`. See `init_home` for `git`,
-    the return value, and errors.
-    """
-    return _create(root, "definitions store", DEFINITIONS_FILES, (), git)
+    of its own, for use with `TXTURES_DEFINITIONS`.
 
-
-def init_home(root: Path, *, git: bool = True) -> str | None:
-    """Create a txtures home at `root`: a site template, a definitions store, and data directories.
-
-    With `git`, the home is also made a Git repository whose `.gitignore`
-    leaves out the data directories, so changes to site settings and
+    With `git`, the store is also made a Git repository, so changes to shared
     definitions can be tracked. The repository is shared with the group when
     the parent directory is group-writable. No commit is made. Git is
-    skipped, with a note returned, when it is not installed or `root` would
-    lie inside another repository.
+    skipped, with a note returned, when it is not installed or the store
+    would lie inside another repository.
 
-    The home is assembled in a temporary sibling directory and renamed into
-    place, so an interrupted call leaves nothing partial at `root`.
+    The store is assembled in a temporary sibling directory and renamed into
+    place, so an interrupted call leaves no partial store at `root`.
 
     Returns a note about Git to show the user, or `None`.
 
@@ -234,14 +236,100 @@ def init_home(root: Path, *, git: bool = True) -> str | None:
         TxturesError: `root` already exists, its parent does not, or
             `git init` fails.
     """
+    return _create(root, "definitions store", DEFINITIONS_FILES, (), Path(".") if git else None)
+
+
+def init_home(root: Path, *, git: bool = True) -> str | None:
+    """Create a txtures home at `root`: a site template, a definitions store, and data directories.
+
+    `root` may be a new path or an existing directory, which may hold other
+    things, such as a checkout of txtures, but none of the home's own entries
+    (`site.yml`, `README.md`, `.gitignore`, and the location directories);
+    other entries are left as they are.
+
+    With `git`, the home is made a Git repository whose `.gitignore` admits
+    only `site.yml`, `README.md`, `definitions/`, and itself: the rest of the
+    home, and anything else kept in it, is untracked. The repository is
+    shared with the group when the home's parent directory is
+    group-writable. No commit is made. Git is skipped, with a note returned,
+    when it is not installed, `root` is already a repository, or `root`
+    would lie inside another repository.
+
+    The home's entries are assembled in a temporary directory and renamed
+    into place, so an interrupted call leaves no partial home.
+
+    Returns a note about Git to show the user, or `None`.
+
+    Raises:
+        TxturesError: `root` is not a directory, already holds an entry of
+            the home, or its parent does not exist, or `git init` fails.
+    """
     files = {
         Path(SITE_DOCUMENT): SITE_TEMPLATE,
         Path("README.md"): HOME_README,
-        Path(".gitignore"): "".join(f"/{key}/\n" for key in LOCATION_KEYS if key != "definitions"),
+        Path(".gitignore"): HOME_GITIGNORE,
         **{Path("definitions") / path: text for path, text in DEFINITIONS_FILES.items()},
     }
     directories = [Path(key) for key in LOCATION_KEYS]
-    return _create(root, "txtures home", files, directories, git)
+    repository = Path(".") if git else None
+    if not (root.exists() or root.is_symlink()):
+        return _create(root, "txtures home", files, directories, repository)
+    if not root.is_dir():
+        raise TxturesError(f"refusing to create txtures home: {root} is not a directory")
+    already = None
+    if repository is not None and (root / ".git").exists():
+        repository = None
+        already = f"{root} is already a Git repository, so it was left as it is"
+    home_entries = (SITE_DOCUMENT, "README.md", ".gitignore", *LOCATION_KEYS)
+    taken = [name for name in home_entries if (root / name).exists()]
+    if taken:
+        raise TxturesError(
+            f"refusing to create txtures home in {root}: it already has {', '.join(taken)}"
+        )
+    return _fill(root, files, directories, repository) or already
+
+
+def _stage(
+    staging: Path,
+    files: dict[Path, str],
+    directories: Sequence[Path],
+    repository: Path | None,
+    inside_of: Path,
+    sharing: Path,
+    what: str,
+) -> str | None:
+    """Write `files` and `directories` into `staging`, and make `repository` in it a Git one."""
+    for directory in directories:
+        (staging / directory).mkdir(parents=True, exist_ok=True)
+    for relative, text in files.items():
+        path = staging / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+    if repository is None:
+        return None
+    return _git_init(staging / repository, inside_of, sharing, what)
+
+
+def _fill(
+    root: Path, files: dict[Path, str], directories: Sequence[Path], repository: Path | None
+) -> str | None:
+    """Add `files` and `directories` to the existing directory `root`, all or none."""
+    staging = Path(tempfile.mkdtemp(prefix=".txtures-init.", dir=root))
+    placed: list[str] = []
+    try:
+        note = _stage(staging, files, directories, repository, root, root.parent, "txtures home")
+        for entry in sorted(staging.iterdir()):
+            if (root / entry.name).exists():
+                raise TxturesError(f"refusing to create txtures home: {root / entry.name} appeared")
+            os.rename(entry, root / entry.name)
+            placed.append(entry.name)
+    except BaseException:
+        for name in placed:
+            os.rename(root / name, staging / name)
+        raise
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
+    return note
 
 
 def _create(
@@ -249,7 +337,7 @@ def _create(
     what: str,
     files: dict[Path, str],
     directories: Sequence[Path],
-    git: bool,
+    repository: Path | None,
 ) -> str | None:
     if root.exists() or root.is_symlink():
         raise TxturesError(f"refusing to create {what}: {root} already exists")
@@ -258,14 +346,8 @@ def _create(
         raise TxturesError(f"cannot create {what}: {parent} does not exist")
     staging = Path(tempfile.mkdtemp(prefix=f".{root.name}.", dir=parent))
     try:
-        for directory in directories:
-            (staging / directory).mkdir(parents=True, exist_ok=True)
-        for relative, text in files.items():
-            path = staging / relative
-            path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_text(text, encoding="utf-8")
         os.chmod(staging, 0o777 & ~_umask())
-        note = _git_init(staging, parent, what) if git else None
+        note = _stage(staging, files, directories, repository, parent, parent, what)
         if root.exists():
             raise TxturesError(f"refusing to create {what}: {root} already exists")
         os.rename(staging, root)
@@ -275,13 +357,17 @@ def _create(
     return note
 
 
-def _git_init(directory: Path, parent: Path, what: str) -> str | None:
-    """Make `directory` a Git repository, or explain why it was left without one."""
+def _git_init(directory: Path, inside_of: Path, sharing: Path, what: str) -> str | None:
+    """Make `directory` a Git repository, or explain why it was left without one.
+
+    `inside_of` is checked for an enclosing repository, and the repository is
+    shared with the group when `sharing` is group-writable.
+    """
     git = shutil.which("git")
     if git is None:
         return f"git is not installed, so the {what} is not a Git repository"
     inside = subprocess.run(
-        [git, "-C", str(parent), "rev-parse", "--show-toplevel"],
+        [git, "-C", str(inside_of), "rev-parse", "--show-toplevel"],
         capture_output=True,
         text=True,
     )
@@ -291,7 +377,7 @@ def _git_init(directory: Path, parent: Path, what: str) -> str | None:
             "so it was not made a repository of its own"
         )
     command = [git, "init", "--quiet"]
-    if parent.stat().st_mode & stat.S_IWGRP:
+    if sharing.stat().st_mode & stat.S_IWGRP:
         command.append("--shared=group")
     result = subprocess.run([*command, str(directory)], capture_output=True, text=True)
     if result.returncode != 0:

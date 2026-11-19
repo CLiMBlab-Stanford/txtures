@@ -77,8 +77,9 @@ def test_site_init_creates_the_home_layout(capsys, tmp_path, txh):
     ]
     assert not (txh / ".git").exists()
     assert main(["def", "validate"]) == 0
+    capsys.readouterr()
     assert main(["site", "init"]) == 1
-    assert "already exists" in capsys.readouterr().err
+    assert "it already has site.yml, README.md, .gitignore, definitions" in capsys.readouterr().err
     assert main(["site", "init", "--no-git", str(tmp_path / "other")]) == 0
     assert f"txtures site use {tmp_path / 'other'}" in capsys.readouterr().err
 

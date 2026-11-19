@@ -1,6 +1,7 @@
 import os
 import shutil
 import subprocess
+from pathlib import Path
 
 import pytest
 from conftest import write
@@ -69,8 +70,29 @@ def test_init_without_git_installed_still_creates_the_store(tmp_path, monkeypatc
     assert (tmp_path / "defs" / "workflows" / "pythia.yml").is_file()
 
 
+def tracked(root) -> list[str]:
+    """The files Git would add in `root`."""
+    status = subprocess.run(
+        ["git", "-C", str(root), "status", "--porcelain", "--untracked-files=all"],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    return sorted(line[3:] for line in status.splitlines())
+
+
+HOME_FILES = [
+    ".gitignore",
+    "README.md",
+    "definitions/README.md",
+    "definitions/configs/lm_scores/pythia410m.yml",
+    "definitions/workflows/pythia.yml",
+    "site.yml",
+]
+
+
 @needs_git
-def test_init_home_tracks_settings_and_definitions_but_not_data(tmp_path):
+def test_init_home_tracks_only_settings_and_definitions(tmp_path):
     txh = tmp_path / "txh"
     assert init_home(txh) is None
     assert messages(txh / "definitions") == []
@@ -78,21 +100,68 @@ def test_init_home_tracks_settings_and_definitions_but_not_data(tmp_path):
         assert (txh / name).is_dir()
     write(txh / "cache" / "x" / "entry", "data")
     write(txh / "outputs" / "doc" / "t.tsv", "data")
-    status = subprocess.run(
-        ["git", "-C", str(txh), "status", "--porcelain", "--untracked-files=all"],
-        capture_output=True,
-        text=True,
-        check=True,
-    ).stdout
-    tracked = sorted(line[3:] for line in status.splitlines())
-    assert tracked == [
-        ".gitignore",
-        "README.md",
-        "definitions/README.md",
-        "definitions/configs/lm_scores/pythia410m.yml",
-        "definitions/workflows/pythia.yml",
-        "site.yml",
-    ]
+    write(txh / "notes.txt", "mine")
+    assert tracked(txh) == HOME_FILES
+
+
+@needs_git
+def test_init_home_fills_a_directory_that_holds_a_checkout(tmp_path):
+    txh = tmp_path / "txh"
+    subprocess.run(["git", "init", "--quiet", str(txh / "code")], check=True)
+    write(txh / "code" / "README.md", "the code\n")
+    write(txh / "notes.txt", "mine\n")
+    assert init_home(txh) is None
+    assert (txh / "notes.txt").read_text() == "mine\n"
+    assert (txh / "code" / "README.md").read_text() == "the code\n"
+    assert not [p for p in txh.iterdir() if p.name.startswith(".txtures-init")]
+    assert (txh / ".git").is_dir()
+    assert tracked(txh) == HOME_FILES
+    assert messages(txh / "definitions") == []
+
+
+def test_init_home_leaves_an_existing_repository_alone(tmp_path):
+    txh = tmp_path / "txh"
+    (txh / ".git").mkdir(parents=True)
+    note = init_home(txh)
+    assert note == f"{txh} is already a Git repository, so it was left as it is"
+    assert (txh / "site.yml").is_file() and (txh / ".gitignore").is_file()
+
+
+@needs_git
+def test_init_home_inside_a_repository_leaves_git_alone(tmp_path):
+    subprocess.run(["git", "init", "--quiet", str(tmp_path / "project")], check=True)
+    note = init_home(tmp_path / "project" / "txh")
+    assert note is not None and "lies inside the Git repository" in note
+    assert not (tmp_path / "project" / "txh" / ".git").exists()
+
+
+def test_init_home_refuses_a_directory_with_home_entries(tmp_path):
+    txh = tmp_path / "txh"
+    write(txh / "cache" / "x", "")
+    write(txh / "README.md", "")
+    write(txh / ".gitignore", "")
+    write(txh / "other", "")
+    with pytest.raises(TxturesError, match="it already has README.md, .gitignore, cache"):
+        init_home(txh, git=False)
+    assert sorted(p.name for p in txh.iterdir()) == [".gitignore", "README.md", "cache", "other"]
+    with pytest.raises(TxturesError, match="is not a directory"):
+        init_home(txh / "other")
+
+
+def test_init_home_puts_back_what_it_placed_when_it_fails(tmp_path, monkeypatch):
+    txh = tmp_path / "txh"
+    write(txh / "keep", "")
+    real = os.rename
+
+    def failing(source, target):
+        if Path(target).name == "outputs":
+            raise OSError("disk full")
+        return real(source, target)
+
+    monkeypatch.setattr(os, "rename", failing)
+    with pytest.raises(OSError, match="disk full"):
+        init_home(txh, git=False)
+    assert sorted(p.name for p in txh.iterdir()) == ["keep"]
 
 
 def test_init_example_workflow_resolves_to_pythia(tmp_path):

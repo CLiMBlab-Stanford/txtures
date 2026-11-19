@@ -26,12 +26,21 @@ txtures site ls                           # every setting: value, source, and me
 ```
 
 `site init` creates the layout with an example config and workflow, and
-makes the home a Git repository unless given `--no-git`. Git tracks
-`site.yml` and `definitions/`, and the `.gitignore` it writes leaves out
-the data directories, so a lab's changes to its settings and definitions
-can be reviewed and undone. The repository is shared with the group when
-the parent directory is group-writable; `site init` makes no commit.
-Without a path, it creates the home in use, by default `~/txtures-home`.
+makes the home a Git repository unless given `--no-git`, so a lab's changes
+to its settings and definitions can be reviewed and undone. Its
+`.gitignore` admits only `site.yml`, `README.md`, `definitions/`, and
+itself: the data directories, and anything else you keep in the home, are
+never tracked. The repository is shared with the group when the home's
+parent directory is group-writable; `site init` makes no commit. Without a
+path, it creates the home in use, by default `~/txtures-home`.
+
+The path may be an existing directory, as long as it has none of the
+home's entries (`site.yml`, `README.md`, `.gitignore`, and the directories
+above). Other contents are left as they are. A checkout of txtures can
+live in the home, for example as `HOME/code`: the home's `.gitignore`
+leaves it out, so the two repositories stay independent, and Git commands
+run inside the checkout act on the checkout. An existing repository at the
+path is left as it is.
 
 `site use` records the home's path in your home-path file,
 `$XDG_CONFIG_HOME/txtures/home-path`, by default

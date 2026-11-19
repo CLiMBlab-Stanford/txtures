@@ -82,11 +82,17 @@ def build_parser() -> argparse.ArgumentParser:
     use.add_argument("path", type=Path, help="the txtures home")
     use.set_defaults(handler=site_use)
     init = site_commands.add_parser(
-        "init", help="create a txtures home, as a Git repository unless --no-git"
+        "init",
+        help="create a txtures home, as a Git repository that tracks site.yml and "
+        "definitions/ unless --no-git; PATH may be an existing directory without the "
+        "home's entries",
     )
     init.add_argument("path", nargs="?", type=Path, help="home to create (default: your home)")
     init.add_argument(
-        "--no-git", action="store_false", dest="git", help="do not make the home a Git repository"
+        "--no-git",
+        action="store_false",
+        dest="git",
+        help="do not make the home a Git repository",
     )
     init.set_defaults(handler=site_init)
     setter = site_commands.add_parser(
