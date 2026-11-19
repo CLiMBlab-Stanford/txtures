@@ -171,10 +171,20 @@ build, and the versions installed, and holds no settings.
 | `--no-launcher` | do not create the `txtures` command |
 | `--default` | make the `txtures` command run this installation, replacing one for another installation |
 | `--dev` | also install the development tools |
+| `--upgrade` | first update the checkout to the newest release, then install it |
 
 Running `./install` again updates the installation and keeps the recorded
 PyTorch build unless `--compute` is given. The `txtures` command in
 `--bin-dir` is replaced only if txtures wrote it.
+
+To move to a new release, run `./install --upgrade`, with any other options
+you use. It fetches the release tags from the checkout's `origin` and moves
+the checkout to the newest release: a fast-forward of `main`, or a checkout
+of the tag when the checkout is already at a release. It then runs that
+release's `./install`, since the script itself may have changed. It refuses
+when the checkout has uncommitted changes or is on a branch other than
+`main`, and changes nothing when the checkout already includes the newest
+release.
 
 txtures can also be installed with pip or uv as a dependency of other
 software, for example with `uv add "txtures[cuda]"` or

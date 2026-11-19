@@ -25,6 +25,9 @@ Options:
   --no-launcher       do not create the txtures command in --bin-dir
   --default           make this installation the one the txtures command runs
   --dev               also install the development tools (pytest, ruff)
+  --upgrade           first update this checkout to the newest release from
+                      origin, then install it; the checkout must have no
+                      uncommitted changes and be on main or a release
   -h, --help          show this help
 EOF
 }
@@ -38,6 +41,52 @@ while [ -L "$script" ]; do
     esac
 done
 checkout=$(CDPATH= cd "$(dirname "$script")" && pwd -P)
+
+fail() {
+    echo "install: $*" >&2
+    exit 1
+}
+
+# --upgrade moves the checkout to the newest release, then runs that
+# release's ./install with the other options, since this script may change.
+upgrade=false
+help=false
+for arg do
+    shift
+    case $arg in
+        --upgrade) upgrade=true ;;
+        -h|--help) help=true; set -- "$@" "$arg" ;;
+        *) set -- "$@" "$arg" ;;
+    esac
+done
+if [ "$upgrade" = true ] && [ "$help" = false ]; then
+    command -v git >/dev/null 2>&1 || fail "--upgrade needs git"
+    top=$(git -C "$checkout" rev-parse --show-toplevel 2>/dev/null) ||
+        fail "--upgrade needs a Git checkout, and $checkout is not one"
+    [ "$(CDPATH= cd "$top" && pwd -P)" = "$checkout" ] ||
+        fail "--upgrade needs a Git checkout, and $checkout is not one"
+    if [ -n "$(git -C "$checkout" status --porcelain --untracked-files=no)" ]; then
+        fail "the checkout has uncommitted changes; commit or stash them, then try again"
+    fi
+    git -C "$checkout" fetch --quiet --tags origin || fail "could not fetch from origin"
+    latest=$(git -C "$checkout" tag --list 'v[0-9]*.[0-9]*.[0-9]*' --sort=-v:refname |
+        grep -v -- - | sed -n 1p)
+    [ -n "$latest" ] || fail "origin has no release tags"
+    if git -C "$checkout" merge-base --is-ancestor "$latest^{commit}" HEAD; then
+        echo "the checkout already includes $latest"
+    else
+        branch=$(git -C "$checkout" symbolic-ref --quiet --short HEAD || true)
+        case $branch in
+            "") git -C "$checkout" checkout --quiet --detach "$latest" ;;
+            main)
+                git -C "$checkout" merge --quiet --ff-only "$latest" ||
+                    fail "main has commits that $latest lacks; update it yourself" ;;
+            *) fail "the checkout is on branch $branch; --upgrade follows releases, so switch to main first" ;;
+        esac
+        echo "updated the checkout to $latest"
+    fi
+    exec "$checkout/install" "$@"
+fi
 
 prefix=$checkout/txtures-install
 compute=

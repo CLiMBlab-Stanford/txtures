@@ -24,6 +24,7 @@ changing any Python already on the machine. It puts a `txtures` command in
 - `--site DIR` uses a lab's txtures home, which holds its definitions,
   stored results, and models. `txtures site use DIR` does the same later.
 - `--prefix DIR` installs somewhere other than the checkout.
+- `--upgrade` first updates the checkout to the newest release.
 
 On a Slurm cluster, `txtures site set execution.executor=slurm
 slurm.partition=NAME` makes `txtures run` submit its computation as a job
