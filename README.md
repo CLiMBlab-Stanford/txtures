@@ -29,7 +29,8 @@ changing any Python already on the machine. It puts a `txtures` command in
 On a Slurm cluster, `txtures site set execution.executor=slurm
 slurm.partition=NAME` makes `txtures run` submit its computation as a job
 and return at once (`slurm.account`, `slurm.gpus`, and others are optional).
-Follow the job with `txtures status`.
+Follow the job with `txtures status`. `tx.compute` and `tx.run` in Python
+submit the same job and wait for its results.
 
 Run `./install --help` for every option and `txtures site ls` to see the
 resulting settings. For gated models, run `txtures hf login` once.

@@ -5,8 +5,13 @@ same output table, then returns the table. `compute` computes features of
 text given directly and returns the table without writing one. Both use the
 configured item and resource stores, so repeated calls reuse earlier work.
 
-The API always computes in the calling process, whatever
-`execution.executor` says; submit Slurm jobs with `txtures run`.
+When `execution.executor` is `slurm`, both submit a Slurm job for the
+missing items and block until it ends; `local=True` computes in the calling
+process instead. Interrupting the call cancels a job it submitted. The text
+given to `compute` reaches the job's tasks through a file in the job
+directory, and the results come back through the cache, so the returned
+table is the one a local call returns. Inside a txtures Slurm task the API
+always computes locally, so tasks never submit further jobs.
 
 The API does not change the process environment. It passes its Hugging
 Face cache and token to the Hugging Face libraries directly, so a host
@@ -19,6 +24,7 @@ txtures at shared locations.
 
 from __future__ import annotations
 
+import sys
 import warnings
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
@@ -28,15 +34,16 @@ from txtures import environment, installation
 from txtures.definitions import Definitions
 from txtures.definitions.resolution import EXTENDS, MAIN
 from txtures.definitions.store import Definition, StoreContents
-from txtures.engine import Executor, Plan, plan_request, run_request
-from txtures.engine.tables import read_table, table_frame
+from txtures.engine import Executor, Plan, item_status, plan_request, run_request
+from txtures.engine import slurm as slurm_jobs
+from txtures.engine.tables import read_table, table_frame, table_is_current
 
 __all__ = ["compute", "read_table", "run"]
-from txtures.errors import DefinitionError, InputError, Problem, SettingsError
+from txtures.errors import DefinitionError, InputError, Problem, SettingsError, TxturesError
 from txtures.inputs import InputSettings, read_texts
 from txtures.modules import REGISTRY
 from txtures.settings import Settings, resolve_settings, uses_default_locations
-from txtures.store import EntryStore
+from txtures.store import EntryStore, read_json
 
 if TYPE_CHECKING:
     import pandas as pd
@@ -124,18 +131,31 @@ def run(
     cache: Path | str | None = None,
     resources: Path | str | None = None,
     device: str | None = None,
+    local: bool = False,
+    workers: int | None = None,
     progress: Callable[[str], None] | None = None,
 ) -> pd.DataFrame:
     """Compute a request for the input `name` and return its output table.
 
     This is `txtures run NAME --workflow WORKFLOW --modules ...`: the table
     is written to the outputs directory, or reused if it is current, and
-    then read with `read_table`. The keyword arguments override settings for
-    this call; `progress`, if given, receives progress messages.
+    then read with `read_table`. The location and `device` arguments
+    override settings for this call.
+
+    When the site's executor is `slurm`, a table that is not current is
+    written by a Slurm job of `workers` tasks (default `slurm.workers`),
+    and the call blocks until the job ends. If a job for the same table is
+    already active, the call waits for it instead of submitting another.
+    Interrupting the call cancels a job it submitted, but not one it only
+    waits for. `local=True` computes in the calling process.
+
+    `progress`, if given, receives progress messages. Without it, messages
+    about Slurm jobs go to standard error and others are discarded.
 
     Raises:
-        TxturesError: The input, definitions, or settings are invalid, or a
-            computation failed.
+        TxturesError: The input, definitions, or settings are invalid, a
+            computation or Slurm job failed, or `workers` was given without
+            Slurm execution.
     """
     resolved = settings(
         _flags(
@@ -150,8 +170,13 @@ def run(
             device,
         )
     )
+    submitting = _submits(resolved, local, workers)
     plan = plan_request(resolved, load_definitions(resolved), name, workflow, modules)
     _warn(plan.notes)
+    if submitting:
+        if not table_is_current(plan):
+            _on_slurm(plan, resolved, modules, workers, progress, lambda: table_is_current(plan))
+        return read_table(plan.table_directory)
     directory, _ = run_request(plan, local_executor(plan, resolved, progress), modules)
     return read_table(directory)
 
@@ -171,6 +196,8 @@ def compute(
     cache: Path | str | None = None,
     resources: Path | str | None = None,
     device: str | None = None,
+    local: bool = False,
+    workers: int | None = None,
     progress: Callable[[str], None] | None = None,
 ) -> pd.DataFrame:
     """Compute the features of `modules` for text given directly, and return the table.
@@ -193,22 +220,27 @@ def compute(
     The table has the columns of an output table. No table is written, but
     computed items are stored and reused.
 
+    When the site's executor is `slurm` and items are missing, a Slurm job
+    of `workers` tasks (default `slurm.workers`) computes them, and the call
+    blocks until the job ends. The text and configs are written to the job
+    directory for the tasks, so they must be JSON values. Waiting,
+    interrupting, `local`, and `progress` behave as for `run`.
+
     Raises:
-        TxturesError: The text, configs, or settings are invalid, or a
-            computation failed.
+        TxturesError: The text, configs, or settings are invalid, a
+            computation or Slurm job failed, or `workers` was given without
+            Slurm execution.
     """
     if config is not None and workflow is not None:
         raise DefinitionError([Problem("compute", "give either config or workflow, not both")])
     requested = [modules] if isinstance(modules, str) else list(modules)
-    report = read_texts(
-        texts,
-        InputSettings(
-            region_delimiter=region_delimiter,
-            sentence_delimiter=sentence_delimiter,
-            region_joiner=region_joiner,
-            sentence_joiner=sentence_joiner,
-        ),
+    input_settings = InputSettings(
+        region_delimiter=region_delimiter,
+        sentence_delimiter=sentence_delimiter,
+        region_joiner=region_joiner,
+        sentence_joiner=sentence_joiner,
     )
+    report = read_texts(texts, input_settings)
     if report.corpus is None:
         raise InputError(report.problems)
     _warn(str(warning) for warning in report.warnings)
@@ -218,6 +250,7 @@ def compute(
             device,
         )
     )
+    submitting = _submits(resolved, local, workers)
     chosen = load_definitions(resolved) if config is None else _given(config)
     plan = plan_request(
         resolved,
@@ -228,10 +261,145 @@ def compute(
         corpus=report.corpus,
     )
     _warn(plan.notes)
+    if submitting and _missing(plan, resolved):
+        given = {
+            "documents": _documents(texts),
+            "input_settings": input_settings.model_dump(mode="json"),
+            "config": None if config is None else {k: dict(v) for k, v in config.items()},
+        }
+        _on_slurm(
+            plan,
+            resolved,
+            requested,
+            workers,
+            progress,
+            lambda: not _missing(plan, resolved),
+            given,
+        )
     run_executor = local_executor(plan, resolved, progress)
     run_executor.prepare_resources()
-    run_executor.compute_items()
+    if not submitting:
+        run_executor.compute_items()
     return table_frame(plan, run_executor)
+
+
+def job_plan(job: slurm_jobs.Job, resolved: Settings) -> Plan:
+    """Plan the request of a submitted Slurm job again, as one of its tasks sees it.
+
+    Raises:
+        TxturesError: The input, text, definitions, or configs are now invalid.
+    """
+    request = job.request
+    if job.source == "input":
+        definitions = load_definitions(resolved)
+        return plan_request(
+            resolved, definitions, request["input"], request["workflow"], request["modules"]
+        )
+    given = read_json(job.directory / "texts.json")
+    report = read_texts(given["documents"], InputSettings(**given["input_settings"]))
+    if report.corpus is None:
+        raise InputError(report.problems)
+    chosen = load_definitions(resolved) if given["config"] is None else _given(given["config"])
+    return plan_request(
+        resolved,
+        chosen,
+        report.corpus.name,
+        request["workflow"],
+        request["modules"],
+        corpus=report.corpus,
+    )
+
+
+def _slurm() -> slurm_jobs.Slurm:
+    return slurm_jobs.Slurm()
+
+
+def _submits(resolved: Settings, local: bool, workers: int | None) -> bool:
+    """Whether a call submits to Slurm, checking `workers` against the answer."""
+    submitting = slurm_jobs.submits(resolved, local)
+    if resolved.executor == "slurm" and not local and slurm_jobs.in_task():
+        warnings.warn(
+            "computing in this process: it runs inside a txtures Slurm task, "
+            "which never submits further jobs",
+            stacklevel=3,
+        )
+    elif workers is not None and not submitting:
+        raise TxturesError("workers applies only to Slurm execution")
+    if workers is not None and workers < 1:
+        raise TxturesError("workers must be at least 1")
+    return submitting
+
+
+def _missing(plan: Plan, resolved: Settings) -> bool:
+    """Whether any persisted item of the plan is missing from the cache."""
+    return any(status.missing for status in item_status(plan, EntryStore(resolved.cache)))
+
+
+def _documents(texts: Texts) -> dict[str, Any]:
+    """The documents of `texts`, by ID, as JSON values that `read_texts` reads the same way."""
+    if isinstance(texts, str):
+        entries = {"1": texts}
+    elif isinstance(texts, Mapping):
+        entries = {str(document_id): value for document_id, value in texts.items()}
+    else:
+        entries = {str(number): value for number, value in enumerate(texts, start=1)}
+    return {
+        document_id: value if isinstance(value, str) else list(value)
+        for document_id, value in entries.items()
+    }
+
+
+def _stderr(message: str) -> None:
+    print(message, file=sys.stderr, flush=True)
+
+
+def _on_slurm(
+    plan: Plan,
+    resolved: Settings,
+    modules: Sequence[str] | None,
+    workers: int | None,
+    progress: Callable[[str], None] | None,
+    done: Callable[[], bool],
+    texts: Mapping[str, Any] | None = None,
+) -> None:
+    """Compute a plan with a Slurm job, or wait for an active one, until `done()`.
+
+    Raises:
+        TxturesError: Submitting failed, or the job ended before `done()`.
+        KeyboardInterrupt: The wait was interrupted; a job this call
+            submitted has been cancelled.
+    """
+    report = progress or _stderr
+    slurm = _slurm()
+    name = plan.input_name if texts is None else slurm_jobs.COMPUTE_NAME
+    existing = slurm_jobs.read_job(slurm_jobs.job_directory(resolved.outputs, plan, name))
+    job = None
+    if existing is not None:
+        states = slurm.states(existing.job_id)
+        if slurm_jobs.is_active(states):
+            job = existing
+            report(
+                f"waiting for job {job.job_id}, which is already computing this request "
+                f"({slurm_jobs.summarize(states)})"
+            )
+    submitted = job is None
+    if job is None:
+        count = workers if workers is not None else resolved["slurm.workers"]
+        job = slurm_jobs.submit(plan, resolved, modules, count, slurm, texts=texts)
+        noun = "task" if count == 1 else "tasks"
+        report(f"submitted job {job.job_id} ({count} {noun}); logs: {job.directory / 'logs'}")
+    try:
+        slurm_jobs.wait(job, slurm, done, report)
+    except KeyboardInterrupt:
+        if submitted:
+            try:
+                slurm.cancel(job.job_id)
+                report(f"cancelled job {job.job_id}")
+            except TxturesError as error:
+                report(f"could not cancel job {job.job_id}: {error}")
+        else:
+            report(f"stopped waiting; job {job.job_id} continues")
+        raise
 
 
 def _given(config: Mapping[str, Mapping[str, Any]]) -> Definitions:

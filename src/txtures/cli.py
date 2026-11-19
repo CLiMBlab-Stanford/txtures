@@ -788,9 +788,15 @@ def run_command(args: argparse.Namespace) -> int:
     settings, plan = _plan(args)
     for note in plan.notes:
         print(f"note: {note}", file=sys.stderr)
-    if settings.executor == "slurm" and not args.local:
+    if slurm_jobs.submits(settings, args.local):
         return _submit(args, settings, plan)
-    if args.workers is not None:
+    if settings.executor == "slurm" and not args.local:
+        print(
+            "note: computing here: this command runs inside a txtures Slurm task, "
+            "which never submits further jobs",
+            file=sys.stderr,
+        )
+    elif args.workers is not None:
         raise TxturesError("--workers applies only to Slurm execution")
     executor = api.local_executor(plan, settings, _progress)
     return _report_run(plan, executor, *run_request(plan, executor, args.modules))
@@ -821,7 +827,13 @@ def _submit(args: argparse.Namespace, settings: Settings, plan) -> int:
 
 
 def worker_command(args: argparse.Namespace) -> int:
-    """Run one task of a submitted job: compute its shard, then write the table."""
+    """Run one task of a submitted job: compute its shard, then write the table.
+
+    A task for text given to `tx.compute` writes no table; the waiting call
+    assembles it from the cache.
+    """
+    # Before anything else, so neither this task nor any process it starts submits jobs.
+    os.environ[slurm_jobs.TASK_VARIABLE] = str(args.directory)
     job = slurm_jobs.read_job(args.directory)
     if job is None:
         raise TxturesError(f"{args.directory} does not hold a submitted job")
@@ -830,13 +842,7 @@ def worker_command(args: argparse.Namespace) -> int:
     flags["execution.executor"] = "local"
     settings = resolve_settings(flags)
     environment.apply(settings)
-    plan = plan_request(
-        settings,
-        api.load_definitions(settings),
-        request["input"],
-        request["workflow"],
-        request["modules"],
-    )
+    plan = api.job_plan(job, settings)
     if plan.table_identity != job.table_identity:
         raise TxturesError(
             "the input, definitions, or resolved resources changed after this job was "
@@ -853,18 +859,29 @@ def worker_command(args: argparse.Namespace) -> int:
         _progress,
         shard=(args.task, job.workers),
     )
+    if job.source == "texts":
+        _progress(f"task {args.task} of {job.workers} for {job.directory}")
+        executor.prepare_resources()
+        executor.compute_items()
+        _report_counts(plan, executor)
+        print(f"computed the items of {job.directory}")
+        return 0
     _progress(f"task {args.task} of {job.workers} for {plan.table_directory}")
     return _report_run(plan, executor, *run_request(plan, executor, request["modules"]))
+
+
+def _report_counts(plan, executor: Executor) -> None:
+    for planned in plan.variants:
+        if planned.module.persist:
+            counts = executor.counts[planned.identity]
+            print(f"{_variant_label(planned)}: {counts.computed} computed, {counts.reused} reused")
 
 
 def _report_run(plan, executor: Executor, directory: Path, written: bool) -> int:
     if not written:
         print(f"{directory} is already current")
         return 0
-    for planned in plan.variants:
-        if planned.module.persist:
-            counts = executor.counts[planned.identity]
-            print(f"{_variant_label(planned)}: {counts.computed} computed, {counts.reused} reused")
+    _report_counts(plan, executor)
     print(f"wrote {directory}")
     return 0
 

@@ -2,24 +2,36 @@
 
 `submit` writes a job directory and submits one job array. Each array task
 replans the request, checks that it still has the identity it was submitted
-with, computes its shard of the missing items and then any items left over,
-and writes the table if no other task has. The first task to finish writes
-it; the others find it current.
+with, and computes its shard of the missing items and then any items left
+over. For a named input, each task then writes the table if no other task
+has: the first task to finish writes it, and the others find it current.
+For text given to `tx.compute`, the tasks only compute items; the calling
+process waits for the job with `wait` and assembles the table itself.
 
-A job directory, `DERIVATIVES/.txtures-jobs/NAME/WORKFLOW-DIGEST12/`, holds:
+A job directory, `OUTPUTS/.txtures-jobs/NAME/WORKFLOW-DIGEST12/`, holds:
 
 - `request.json`: the settings, request, and table identity the tasks use;
+- `texts.json`: the text given to `tx.compute`, for those requests only;
 - `job.sh`: the batch script;
 - `job.json`: the job ID and submission time, written after `sbatch` succeeds;
 - `logs/`: one log file per array task.
+
+NAME is the input's name, or `tx.compute` for text given to `tx.compute`.
+
+Slurm tasks never submit jobs. The batch script and `txtures worker` set
+`TASK_VARIABLE`, which every process the task starts inherits; `submit`
+refuses to run where it is set, and `submits` then chooses local execution.
 """
 
 from __future__ import annotations
 
+import json
+import os
 import shlex
 import shutil
 import subprocess
 import sys
+import time
 from collections import Counter
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -32,6 +44,17 @@ from txtures.settings import Settings
 from txtures.store import make_shared_dir, now, read_json, write_json
 
 JOBS_DIRECTORY = ".txtures-jobs"
+COMPUTE_NAME = "tx.compute"
+"""The job directory name for requests from `tx.compute`, which have no input name."""
+TASK_VARIABLE = "TXTURES_TASK"
+"""Set, to the job directory, in Slurm tasks and every process they start."""
+POLL_SECONDS = 10
+"""How often `wait` checks a job's task states."""
+GRACE_SECONDS = 120
+"""How long `wait` lets a job show no active task before deciding it has failed.
+
+`sacct` and `squeue` can omit a job for a short time after submission, and a
+shared file system can show published results to the waiting host late."""
 ACTIVE_STATES = frozenset(
     {"PENDING", "RUNNING", "CONFIGURING", "COMPLETING", "REQUEUED", "RESIZING", "SUSPENDED"}
 )
@@ -60,9 +83,30 @@ class Job:
     table_identity: str
     request: Mapping[str, Any]
 
+    @property
+    def source(self) -> str:
+        """`input` for a named input, or `texts` for text given to `tx.compute`."""
+        return self.request.get("source", "input")
 
-def job_directory(outputs: Path, plan: Plan) -> Path:
-    return outputs / JOBS_DIRECTORY / plan.input_name / plan.table_directory.name
+
+def job_directory(outputs: Path, plan: Plan, name: str | None = None) -> Path:
+    """The job directory of a plan, under `name` (by default the plan's input name)."""
+    return outputs / JOBS_DIRECTORY / (name or plan.input_name) / plan.table_directory.name
+
+
+def in_task(env: Mapping[str, str] | None = None) -> bool:
+    """Whether this process runs inside a txtures Slurm task."""
+    env = os.environ if env is None else env
+    return bool(env.get(TASK_VARIABLE))
+
+
+def submits(settings: Settings, local: bool = False) -> bool:
+    """Whether a request should be submitted to Slurm rather than computed here.
+
+    It is submitted when the site's executor is `slurm`, unless `local` is
+    true or this process runs inside a txtures Slurm task.
+    """
+    return settings.executor == "slurm" and not local and not in_task()
 
 
 class Slurm:
@@ -84,6 +128,10 @@ class Slurm:
         """Submit a batch script and return its job ID."""
         output = self._call(["sbatch", "--parsable", str(script)]).strip()
         return output.split(";")[0]
+
+    def cancel(self, job_id: str) -> None:
+        """Cancel every task of a job."""
+        self._call(["scancel", job_id])
 
     def states(self, job_id: str) -> dict[str, str]:
         """Return the state of each task of a job, by task ID.
@@ -138,6 +186,7 @@ def batch_script(
         options.append(f"--gres=gpu:{slurm['gpus']}")
     options += list(slurm.get("options") or [])
     lines = ["#!/bin/sh", *(f"#SBATCH {shlex.quote(option)}" for option in options)]
+    lines.append(f"export {TASK_VARIABLE}={shlex.quote(str(directory))}")
     lines.append(f'exec {shlex.join(command)} "${{SLURM_ARRAY_TASK_ID:-0}}"')
     return "\n".join(lines) + "\n"
 
@@ -180,16 +229,28 @@ def submit(
     modules: Sequence[str] | None,
     workers: int,
     slurm: Slurm,
+    *,
+    texts: Mapping[str, Any] | None = None,
 ) -> Job:
     """Submit a request as a job array of `workers` tasks.
 
+    Without `texts`, the request is the plan's named input. With `texts`,
+    it is text given to `tx.compute`: `texts` holds the `documents` (a
+    mapping from document ID to document), the `input_settings` that divide
+    them, and the `config` bodies, or `None` to use the definitions store.
+
     Raises:
-        TxturesError: Slurm settings are incomplete or `sbatch` failed.
+        TxturesError: This process runs inside a txtures Slurm task, the
+            Slurm settings are incomplete, or `sbatch` failed.
     """
-    directory = job_directory(settings.outputs, plan)
+    if in_task():
+        raise TxturesError("a txtures Slurm task cannot submit Slurm jobs")
+    name = plan.input_name if texts is None else COMPUTE_NAME
+    directory = job_directory(settings.outputs, plan, name)
     make_shared_dir(directory / "logs")
     request = {
-        "input": plan.input_name,
+        "source": "input" if texts is None else "texts",
+        "input": name,
         "workflow": plan.workflow,
         "modules": list(modules) if modules is not None else None,
         "table_identity": plan.table_identity,
@@ -200,11 +261,20 @@ def submit(
         },
         "created": now(),
     }
+    if texts is not None:
+        # Key order is kept: it orders the documents and a config's sweeps.
+        try:
+            encoded = json.dumps(dict(texts), indent=2, ensure_ascii=False)
+        except (TypeError, ValueError) as error:
+            raise TxturesError(
+                f"the texts and configs must be JSON values for Slurm: {error}"
+            ) from None
+        (directory / "texts.json").write_text(encoded + "\n", encoding="utf-8")
     write_json(directory / "request.json", request)
     command = [sys.executable, "-I", "-m", "txtures", "worker", str(directory)]
     script = directory / "job.sh"
     script.write_text(
-        batch_script(directory, plan.input_name, workers, settings.group("slurm"), command),
+        batch_script(directory, name, workers, settings.group("slurm"), command),
         encoding="utf-8",
     )
     (directory / "job.json").unlink(missing_ok=True)
@@ -213,3 +283,46 @@ def submit(
     job = read_job(directory)
     assert job is not None
     return job
+
+
+def wait(
+    job: Job,
+    slurm: Slurm,
+    done: Callable[[], bool],
+    report: Callable[[str], None],
+    *,
+    poll: float | None = None,
+    grace: float | None = None,
+    clock: Callable[[], float] = time.monotonic,
+    sleep: Callable[[float], None] = time.sleep,
+) -> None:
+    """Block until a job has no active task and `done()` is true.
+
+    `report` receives the job's task states whenever they change. A task
+    may fail while another completes its work, so success is judged by
+    `done`, not by task states.
+
+    Raises:
+        TxturesError: The job has had no active task for `grace` seconds
+            and `done()` is still false, or its states cannot be read.
+    """
+    poll = POLL_SECONDS if poll is None else poll
+    grace = GRACE_SECONDS if grace is None else grace
+    last = None
+    quiet_since = clock()
+    while True:
+        states = slurm.states(job.job_id)
+        summary = summarize(states)
+        if states and summary != last:
+            report(f"job {job.job_id}: {summary}")
+            last = summary
+        if is_active(states):
+            quiet_since = clock()
+        elif done():
+            return
+        elif clock() - quiet_since >= grace:
+            raise TxturesError(
+                f"job {job.job_id} ended without completing the request ({summary}); "
+                f"see the logs in {job.directory / 'logs'}"
+            )
+        sleep(poll)
