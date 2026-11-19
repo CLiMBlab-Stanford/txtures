@@ -102,8 +102,12 @@ def test_invalid_record_is_reported(prefix):
         read(prefix)
 
 
-def test_current_is_none_outside_an_installation():
+def test_current_finds_the_record_of_the_running_environment(prefix, tmp_path, monkeypatch):
+    configured(prefix, tmp_path)
+    monkeypatch.setattr(installation.sys, "prefix", str(tmp_path / "elsewhere" / "env"))
     assert installation.current() is None
+    monkeypatch.setattr(installation.sys, "prefix", str(prefix / "env"))
+    assert installation.current().prefix == prefix
 
 
 # Launchers
@@ -168,3 +172,52 @@ def test_run_context_carries_the_saved_token(tmp_path, monkeypatch):
     context = environment.run_context(settings)
     assert context.hf_token == "hf_secret"
     assert "hf_secret" not in repr(context)
+
+
+# Reinstalling with the recorded choices
+
+
+def test_the_record_keeps_dev_and_the_command_directory(prefix, tmp_path):
+    installed, _ = configured(prefix, tmp_path, dev=True, bin_dir=tmp_path / "bin")
+    assert installed.dev is True
+    assert installed.record["bin_dir"] == str(tmp_path / "bin")
+    assert installation.reinstall_arguments(installed) == [
+        "--prefix",
+        str(prefix),
+        "--compute",
+        "cpu",
+        "--dev",
+        "--bin-dir",
+        str(tmp_path / "bin"),
+    ]
+
+
+def test_reinstall_options_change_the_recorded_choices(prefix, tmp_path):
+    installed, _ = configured(prefix, tmp_path, dev=True)
+    arguments = installation.reinstall_arguments(
+        installed, upgrade=True, compute="cuda", dev=False, make_default=True
+    )
+    assert arguments == [
+        "--upgrade",
+        "--prefix",
+        str(prefix),
+        "--compute",
+        "cuda",
+        "--no-launcher",
+        "--default",
+    ]
+
+
+def test_records_before_dev_was_recorded(prefix, tmp_path, monkeypatch):
+    configured(prefix, tmp_path)
+    path = prefix / "install.json"
+    record = json.loads(path.read_text())
+    del record["dev"], record["bin_dir"]
+    path.write_text(json.dumps(record))
+    installed = read(prefix)
+    assert installed.dev is None
+    arguments = installation.reinstall_arguments(installed)
+    # This test environment has pytest, which marks the development tools.
+    assert arguments == ["--prefix", str(prefix), "--compute", "cpu", "--dev"]
+    monkeypatch.setattr(installation.importlib.util, "find_spec", lambda name: None)
+    assert "--dev" not in installation.reinstall_arguments(installed)

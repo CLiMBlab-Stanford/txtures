@@ -1,11 +1,40 @@
 # Slurm
 
-When `execution.executor` is `slurm`, `txtures run` submits its computation
-as a Slurm job array and returns once the job is queued. `tx.compute` and
-`tx.run` in Python submit the same kind of job and wait for it to end (see
-[From Python](#from-python)). Choose Slurm in your site with
-`txtures site set execution.executor=slurm`; `txtures run --local` then
-computes one request here instead.
+On a cluster, set a partition in your site, and txtures submits work that
+runs language models as a Slurm job array:
+
+```bash
+txtures site set slurm.partition=gpu
+```
+
+`txtures run` then returns once the job is queued. `tx.compute` and `tx.run`
+in Python submit the same kind of job and wait for it to end (see
+[From Python](#from-python)). `txtures run --local` and `local=True` compute
+one request here instead.
+
+## Choosing local or Slurm
+
+`execution.executor` decides where requests are computed:
+
+| Value | Requests are computed |
+| --- | --- |
+| `auto` (default) | on Slurm when they need intensive work and Slurm is set up; otherwise here |
+| `slurm` | always on Slurm |
+| `local` | always here |
+
+With `auto`:
+
+- Intensive work means missing results of a module that runs a neural model,
+  such as `lm_scores`, however few documents there are. A request whose
+  missing results are all light, such as surprisal from stored scores, is
+  computed here, and so is a request whose results are all stored.
+- Slurm is set up when `slurm.partition` is set and the `sbatch` command is
+  available. Where neither is present, as on a laptop, requests are computed
+  here. Where only one is, intensive work is computed here with a note.
+
+Because the choice depends on the machine, one site can serve a cluster and
+the machines without Slurm that share the home. `--workers` and `workers=`
+apply when a request is submitted and are ignored otherwise.
 
 ## Settings
 

@@ -66,7 +66,7 @@ the Python API issues a `DefaultLocationsWarning`, once per process.
 | Key | Default | Meaning |
 | --- | --- | --- |
 | `execution.device` | `auto` | `auto` (CUDA, then Apple MPS, then CPU), or a PyTorch device such as `cpu` or `cuda:1` |
-| `execution.executor` | `local` | `local` or `slurm` (see [Slurm](slurm.md)) |
+| `execution.executor` | `auto` | `auto` uses Slurm for intensive work where it is set up; `slurm` or `local` always (see [Slurm](slurm.md#choosing-local-or-slurm)) |
 | `execution.max_variants` | 64 | the most variants one module may expand to |
 
 The `slurm` settings are listed in [Slurm](slurm.md#settings).
@@ -150,8 +150,8 @@ refuses to run while any of these remain. Its message lists the steps for
 your files: which directories to move or link into the home, the
 `txtures site use` and `txtures site set` commands that record your home
 and its settings, and which old files to remove. `txtures site use` removes
-`~/.config/txtures/settings.yml`, and `./install` removes settings from the
-record. The `site` commands still run meanwhile, with a warning, so the
+`~/.config/txtures/settings.yml`, and `txtures install` removes settings from
+the record. The `site` commands still run meanwhile, with a warning, so the
 steps can be carried out.
 
 ## Installation
@@ -160,7 +160,8 @@ steps can be carried out.
 `CHECKOUT/txtures-install/`, with a pinned uv, a uv-managed CPython, and the
 locked dependencies from `uv.lock`. The installation holds software only.
 Its record, `install.json`, notes the checkout, the environment, the PyTorch
-build, and the versions installed, and holds no settings.
+build, whether the development tools are installed, where the `txtures`
+command was put, and the versions installed. It holds no settings.
 
 | Option | Meaning |
 | --- | --- |
@@ -177,8 +178,34 @@ Running `./install` again updates the installation and keeps the recorded
 PyTorch build unless `--compute` is given. The `txtures` command in
 `--bin-dir` is replaced only if txtures wrote it.
 
-To move to a new release, run `./install --upgrade`, with any other options
-you use. It fetches the release tags from the checkout's `origin` and moves
+### Updating an installation
+
+`txtures install` runs the checkout's `./install` again for the
+installation it belongs to. It keeps the prefix, the PyTorch build, the
+development tools, and the location of the `txtures` command, so you do not
+have to repeat the options of the first install:
+
+```bash
+txtures install --upgrade   # move to the newest release and install it
+txtures install             # reinstall the current checkout
+```
+
+| Option | Meaning |
+| --- | --- |
+| `--upgrade` | first update the checkout to the newest release, as `./install --upgrade` does |
+| `--compute cuda\|cpu` | switch the PyTorch build |
+| `--dev`, `--no-dev` | add or remove the development tools |
+| `--default` | make the `txtures` command run this installation |
+
+`txtures install` works only in an installation made by `./install`, and
+only while its checkout is still where it was. It works even while your
+settings are invalid. Installations made before 0.5.0 did not record the
+development tools or the command location. For those, it keeps the
+development tools if they are installed and puts the command in
+`~/.local/bin`, without replacing one that runs another installation.
+
+To move to a new release, run `txtures install --upgrade`, or
+`./install --upgrade` with any other options you use. It fetches the release tags from the checkout's `origin` and moves
 the checkout to the newest release: a fast-forward of `main`, or a checkout
 of the tag when the checkout is already at a release. It then runs that
 release's `./install`, since the script itself may have changed. It refuses

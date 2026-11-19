@@ -5,6 +5,7 @@ import pytest
 from conftest import write
 
 import txtures
+from txtures import installation
 from txtures.cli import main
 from txtures.settings import SPECS
 
@@ -38,7 +39,9 @@ def test_no_arguments_prints_help(capsys):
     assert "usage: txtures" in capsys.readouterr().out
 
 
-def test_site_ls_reports_values_sources_and_meanings(capsys, tmp_path, txh):
+def test_site_ls_reports_values_sources_and_meanings(capsys, monkeypatch, tmp_path, txh):
+    # The tests may run inside an ./install environment, which has a record.
+    monkeypatch.setattr(installation, "current", lambda: None)
     assert main(["--cache", str(tmp_path / "c"), "site", "ls", "--json"]) == 0
     payload = json.loads(capsys.readouterr().out)
     assert payload["installation"] is None
@@ -402,3 +405,40 @@ def test_plan_run_status_and_gc(capsys, fake_engine):
 def test_run_rejects_unknown_workflow(capsys, fake_engine):
     assert main(["run", "doc", "-w", "missing"]) == 1
     assert "no workflow named 'missing'" in capsys.readouterr().err
+
+
+# txtures install
+
+
+def test_install_runs_the_checkout_script_with_the_recorded_choices(capsys, monkeypatch, tmp_path):
+    from txtures import cli
+
+    checkout = tmp_path / "checkout"
+    script = write(checkout / "install", "#!/bin/sh\n")
+    script.chmod(0o755)
+    prefix = tmp_path / "prefix"
+    prefix.mkdir()
+    installed, _ = installation.configure(prefix, checkout, compute="cuda", dev=False)
+    monkeypatch.setattr(installation, "current", lambda: installed)
+    calls = []
+    monkeypatch.setattr(cli.os, "execv", lambda path, argv: calls.append((path, argv)))
+    # Invalid settings do not stop it.
+    write(tmp_path / "txh" / "site.yml", "execution: [\n")
+
+    assert main(["install", "--upgrade", "--dev"]) == 0
+    expected = [str(script), "--upgrade", "--prefix", str(prefix), "--compute", "cuda"]
+    assert calls == [(script, [*expected, "--dev", "--no-launcher"])]
+    assert capsys.readouterr().out.startswith(f"running {script} --upgrade")
+
+
+def test_install_needs_an_installation_and_its_checkout(capsys, monkeypatch, tmp_path):
+    monkeypatch.setattr(installation, "current", lambda: None)
+    assert main(["install"]) == 1
+    assert "not installed by ./install" in capsys.readouterr().err
+
+    prefix = tmp_path / "prefix"
+    prefix.mkdir()
+    installed, _ = installation.configure(prefix, tmp_path / "gone", compute="cpu")
+    monkeypatch.setattr(installation, "current", lambda: installed)
+    assert main(["install"]) == 1
+    assert "has moved or was removed" in capsys.readouterr().err

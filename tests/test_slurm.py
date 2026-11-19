@@ -182,10 +182,12 @@ def test_a_task_never_submits(monkeypatch, tmp_path):
     settings = resolve_settings(
         {"home": str(tmp_path), "execution.executor": "slurm"}, env={}, user_home=tmp_path
     )
-    assert slurm_jobs.submits(settings)
-    assert not slurm_jobs.submits(settings, local=True)
+    # These choices are made without looking at the plan.
+    assert slurm_jobs.decide(settings, False, None, None).submit
+    assert not slurm_jobs.decide(settings, True, None, None).submit
     monkeypatch.setenv(slurm_jobs.TASK_VARIABLE, "/jobs/x")
-    assert not slurm_jobs.submits(settings)
+    decision = slurm_jobs.decide(settings, False, None, None)
+    assert not decision.submit and "inside a txtures Slurm task" in decision.note
     with pytest.raises(TxturesError, match="cannot submit"):
         slurm_jobs.submit(None, settings, None, 1, FakeSlurm())
 
@@ -467,9 +469,10 @@ def test_the_api_inside_a_task_computes_here(api_slurm, monkeypatch):
     import txtures as tx
 
     monkeypatch.setenv(slurm_jobs.TASK_VARIABLE, "/jobs/x")
-    with pytest.warns(UserWarning, match="inside a txtures Slurm task"):
-        table = tx.compute("fake_feature", "a bb", workers=3)
+    messages = []
+    table = tx.compute("fake_feature", "a bb", workers=3, progress=messages.append)
     assert list(table["length"]) == [1.0, 2.0]
+    assert "inside a txtures Slurm task" in messages[0]
     assert api_slurm.scripts == []
 
 
@@ -481,6 +484,85 @@ def test_api_workers_need_slurm(api_slurm):
         tx.compute("fake_feature", "a b", local=True, workers=2)
     with pytest.raises(TxturesError, match="at least 1"):
         tx.compute("fake_feature", "a b", workers=0)
+
+
+# The auto executor
+
+
+@pytest.fixture
+def auto_site(api_slurm, monkeypatch):
+    """A site whose executor is auto, on a host with sbatch, where fake_scores is intensive."""
+    write(
+        Path(os.environ["TXTURES_HOME"]) / "site.yml",
+        "execution:\n  executor: auto\nslurm:\n  partition: gpu\n",
+    )
+    monkeypatch.setattr(slurm_jobs.shutil, "which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(fake_modules.FakeScores, "intensive", True)
+    return api_slurm
+
+
+def test_lm_scores_is_intensive_and_surprisal_is_not():
+    from txtures.modules import REGISTRY
+
+    assert REGISTRY["lm_scores"].intensive
+    assert not REGISTRY["surprisal"].intensive
+
+
+@pytest.mark.filterwarnings("ignore:.*revision is not pinned:UserWarning")
+def test_auto_submits_only_while_intensive_work_is_missing(auto_site):
+    import txtures as tx
+
+    messages = []
+    tx.compute("fake_feature", "a bb", progress=messages.append)
+    assert messages[0] == "submitting to Slurm: fake_scores results are missing"
+    assert len(auto_site.scripts) == 1
+
+    messages = []
+    table = tx.compute("fake_feature", "a bb", progress=messages.append)
+    assert list(table["length"]) == [1.0, 2.0]
+    assert messages == [] and len(auto_site.scripts) == 1
+
+
+@pytest.mark.filterwarnings("ignore:.*revision is not pinned:UserWarning")
+def test_auto_computes_light_work_here(auto_site, monkeypatch):
+    import txtures as tx
+
+    monkeypatch.setattr(fake_modules.FakeScores, "intensive", False)
+    messages = []
+    tx.compute("fake_feature", "a bb", workers=2, progress=messages.append)
+    assert not any("Slurm" in message for message in messages)
+    assert auto_site.scripts == []
+    assert fake_modules.CALLS["fake_scores"] == 1
+
+
+@pytest.mark.filterwarnings("ignore:.*revision is not pinned:UserWarning")
+def test_auto_computes_here_without_slurm(auto_site, monkeypatch):
+    import txtures as tx
+
+    def notes(texts):
+        messages = []
+        tx.compute("fake_feature", texts, progress=messages.append)
+        return [message for message in messages if "Slurm" in message]
+
+    monkeypatch.setattr(slurm_jobs.shutil, "which", lambda name: None)
+    assert notes("a bb") == ["computing fake_scores here: Slurm is not set up (no sbatch)"]
+    # The default site: auto, without a partition. Where there is no Slurm, no note.
+    (Path(os.environ["TXTURES_HOME"]) / "site.yml").unlink()
+    assert notes("a b c") == []
+    monkeypatch.setattr(slurm_jobs.shutil, "which", lambda name: f"/usr/bin/{name}")
+    assert notes("a b c d") == [
+        "computing fake_scores here: Slurm is not set up (slurm.partition is unset)"
+    ]
+    assert auto_site.scripts == []
+
+
+def test_auto_through_the_command_line(capsys, auto_site, fake_engine):  # noqa: F811
+    assert main(["run", "doc", "--workers", "2"]) == 0
+    captured = capsys.readouterr()
+    assert "note: submitting to Slurm: fake_scores results are missing" in captured.err
+    assert "submitted job 42 (2 tasks)" in captured.out
+    assert main(["run", "doc", "--local", "--workers", "2"]) == 1
+    assert "--workers applies only to Slurm" in capsys.readouterr().err
 
 
 # On a real cluster

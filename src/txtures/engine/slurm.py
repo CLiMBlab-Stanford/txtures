@@ -38,10 +38,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from txtures.engine.planning import Plan
+from txtures.engine.planning import Plan, item_kind
 from txtures.errors import TxturesError
 from txtures.settings import Settings
-from txtures.store import make_shared_dir, now, read_json, write_json
+from txtures.store import EntryStore, make_shared_dir, now, read_json, write_json
 
 JOBS_DIRECTORY = ".txtures-jobs"
 COMPUTE_NAME = "tx.compute"
@@ -100,13 +100,67 @@ def in_task(env: Mapping[str, str] | None = None) -> bool:
     return bool(env.get(TASK_VARIABLE))
 
 
-def submits(settings: Settings, local: bool = False) -> bool:
-    """Whether a request should be submitted to Slurm rather than computed here.
+def available(settings: Settings) -> bool:
+    """Whether Slurm is set up here: `slurm.partition` is set and `sbatch` is on PATH."""
+    return bool(settings["slurm.partition"]) and shutil.which("sbatch") is not None
 
-    It is submitted when the site's executor is `slurm`, unless `local` is
-    true or this process runs inside a txtures Slurm task.
+
+def intensive_work(plan: Plan, items: EntryStore) -> list[str]:
+    """Names of the intensive modules with results missing from `items`, in plan order."""
+    found = []
+    for planned in plan.variants:
+        if not (planned.module.persist and planned.module.intensive) or planned.name in found:
+            continue
+        kind = item_kind(planned.name)
+        if any(
+            items.get(kind, planned.item_identity(document)) is None
+            for document in plan.corpus.documents
+        ):
+            found.append(planned.name)
+    return found
+
+
+@dataclass(frozen=True)
+class Decision:
+    """Whether to submit a request to Slurm, and a note explaining an unexpected choice."""
+
+    submit: bool
+    note: str | None = None
+
+
+def decide(settings: Settings, local: bool, plan: Plan, items: EntryStore) -> Decision:
+    """Decide whether a request is submitted to Slurm or computed here.
+
+    Nothing is submitted when `local` is true, when the executor is `local`,
+    or when this process runs inside a txtures Slurm task. The `slurm`
+    executor always submits. The `auto` executor submits when the plan has
+    intensive work missing from `items` and Slurm is `available`.
+
+    The note says why a request is computed here when Slurm execution was
+    expected: inside a task, or with intensive work missing where Slurm is
+    half set up (`sbatch` without `slurm.partition`, or the reverse). Where
+    neither is present, `auto`, the default, computes here without a note.
     """
-    return settings.executor == "slurm" and not local and not in_task()
+    if local or settings.executor == "local":
+        return Decision(False)
+    if in_task():
+        return Decision(
+            False,
+            "computing here: this runs inside a txtures Slurm task, "
+            "which never submits further jobs",
+        )
+    if settings.executor == "slurm":
+        return Decision(True)
+    work = intensive_work(plan, items)
+    if not work:
+        return Decision(False)
+    if not available(settings):
+        partition = bool(settings["slurm.partition"])
+        if not partition and shutil.which("sbatch") is None:
+            return Decision(False)
+        missing = "no sbatch" if partition else "slurm.partition is unset"
+        return Decision(False, f"computing {', '.join(work)} here: Slurm is not set up ({missing})")
+    return Decision(True, f"submitting to Slurm: {', '.join(work)} results are missing")
 
 
 class Slurm:

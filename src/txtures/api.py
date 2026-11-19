@@ -5,8 +5,9 @@ same output table, then returns the table. `compute` computes features of
 text given directly and returns the table without writing one. Both use the
 configured item and resource stores, so repeated calls reuse earlier work.
 
-When `execution.executor` is `slurm`, both submit a Slurm job for the
-missing items and block until it ends; `local=True` computes in the calling
+When `execution.executor` is `slurm`, or `auto` and intensive work is
+missing where Slurm is set up, both submit a Slurm job for the missing
+items and block until it ends; `local=True` computes in the calling
 process instead. Interrupting the call cancels a job it submitted. The text
 given to `compute` reaches the job's tasks through a file in the job
 directory, and the results come back through the cache, so the returned
@@ -144,18 +145,21 @@ def run(
 
     When the site's executor is `slurm`, a table that is not current is
     written by a Slurm job of `workers` tasks (default `slurm.workers`),
-    and the call blocks until the job ends. If a job for the same table is
+    and the call blocks until the job ends. With `auto`, this happens only
+    when intensive work is missing and Slurm is set up here (see
+    `slurm.decide`). If a job for the same table is
     already active, the call waits for it instead of submitting another.
     Interrupting the call cancels a job it submitted, but not one it only
     waits for. `local=True` computes in the calling process.
 
     `progress`, if given, receives progress messages. Without it, messages
-    about Slurm jobs go to standard error and others are discarded.
+    about Slurm jobs and the choice of executor go to standard error, and
+    others are discarded.
 
     Raises:
         TxturesError: The input, definitions, or settings are invalid, a
-            computation or Slurm job failed, or `workers` was given without
-            Slurm execution.
+            computation or Slurm job failed, or `workers` was given with
+            local execution.
     """
     resolved = settings(
         _flags(
@@ -170,10 +174,10 @@ def run(
             device,
         )
     )
-    submitting = _submits(resolved, local, workers)
+    _check_workers(resolved, local, workers)
     plan = plan_request(resolved, load_definitions(resolved), name, workflow, modules)
     _warn(plan.notes)
-    if submitting:
+    if _submits(plan, resolved, local, progress):
         if not table_is_current(plan):
             _on_slurm(plan, resolved, modules, workers, progress, lambda: table_is_current(plan))
         return read_table(plan.table_directory)
@@ -222,14 +226,15 @@ def compute(
 
     When the site's executor is `slurm` and items are missing, a Slurm job
     of `workers` tasks (default `slurm.workers`) computes them, and the call
-    blocks until the job ends. The text and configs are written to the job
+    blocks until the job ends. With `auto`, this happens only when
+    intensive work is missing and Slurm is set up here. The text and configs are written to the job
     directory for the tasks, so they must be JSON values. Waiting,
     interrupting, `local`, and `progress` behave as for `run`.
 
     Raises:
         TxturesError: The text, configs, or settings are invalid, a
-            computation or Slurm job failed, or `workers` was given without
-            Slurm execution.
+            computation or Slurm job failed, or `workers` was given with
+            local execution.
     """
     if config is not None and workflow is not None:
         raise DefinitionError([Problem("compute", "give either config or workflow, not both")])
@@ -250,7 +255,7 @@ def compute(
             device,
         )
     )
-    submitting = _submits(resolved, local, workers)
+    _check_workers(resolved, local, workers)
     chosen = load_definitions(resolved) if config is None else _given(config)
     plan = plan_request(
         resolved,
@@ -261,6 +266,7 @@ def compute(
         corpus=report.corpus,
     )
     _warn(plan.notes)
+    submitting = _submits(plan, resolved, local, progress)
     if submitting and _missing(plan, resolved):
         given = {
             "documents": _documents(texts),
@@ -314,20 +320,23 @@ def _slurm() -> slurm_jobs.Slurm:
     return slurm_jobs.Slurm()
 
 
-def _submits(resolved: Settings, local: bool, workers: int | None) -> bool:
-    """Whether a call submits to Slurm, checking `workers` against the answer."""
-    submitting = slurm_jobs.submits(resolved, local)
-    if resolved.executor == "slurm" and not local and slurm_jobs.in_task():
-        warnings.warn(
-            "computing in this process: it runs inside a txtures Slurm task, "
-            "which never submits further jobs",
-            stacklevel=3,
-        )
-    elif workers is not None and not submitting:
+def _check_workers(resolved: Settings, local: bool, workers: int | None) -> None:
+    if workers is None:
+        return
+    if local or resolved.executor == "local":
         raise TxturesError("workers applies only to Slurm execution")
-    if workers is not None and workers < 1:
+    if workers < 1:
         raise TxturesError("workers must be at least 1")
-    return submitting
+
+
+def _submits(
+    plan: Plan, resolved: Settings, local: bool, progress: Callable[[str], None] | None
+) -> bool:
+    """Whether a call submits to Slurm. Notes about the choice go to `progress` or standard error."""
+    decision = slurm_jobs.decide(resolved, local, plan, EntryStore(resolved.cache))
+    if decision.note:
+        (progress or _stderr)(decision.note)
+    return decision.submit
 
 
 def _missing(plan: Plan, resolved: Settings) -> bool:

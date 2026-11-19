@@ -107,6 +107,10 @@ class Module:
         persist: Whether results are kept in the cache. Cheap modules
             set this to false and are recomputed whenever they are needed.
         batch_size: Maximum number of documents passed to one `run_batch` call.
+        intensive: Whether computing the module's results needs heavy
+            compute, such as running a neural model, best on a GPU. With
+            `execution.executor` set to `auto`, a request whose missing
+            results include an intensive module's is submitted to Slurm.
     """
 
     name: ClassVar[str]
@@ -117,6 +121,7 @@ class Module:
     sweeps: ClassVar[Mapping[str, tuple[str, ...]]] = {}
     persist: ClassVar[bool] = True
     batch_size: ClassVar[int] = 1
+    intensive: ClassVar[bool] = False
 
     def resources(self, config: ModuleConfig) -> Mapping[str, Resource]:
         """Return the resources a config needs, by name. The default needs none."""

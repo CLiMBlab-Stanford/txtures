@@ -5,8 +5,8 @@ import txtures as tx
 ```
 
 The API runs the same modules, stores, and settings as the command line.
-When `execution.executor` is `slurm`, `tx.compute` and `tx.run` submit a
-Slurm job and wait for it (see [Slurm](#slurm)).
+Where Slurm is set up, `tx.compute` and `tx.run` submit work that runs
+language models as a Slurm job and wait for it (see [Slurm](#slurm)).
 
 ## `tx.compute`
 
@@ -80,8 +80,11 @@ numbers, with `NA` read as NaN and `Inf` as infinity, or Booleans.
 
 ## Slurm
 
-When the site's `execution.executor` is `slurm`, `tx.compute` and `tx.run`
-compute what is missing with a Slurm job and block until it ends. They then
+With the default `execution.executor`, `auto`, `tx.compute` and `tx.run`
+compute what is missing with a Slurm job when intensive work, such as
+`lm_scores`, is missing and Slurm is set up on this machine, and block until
+the job ends. Otherwise they compute here. `slurm` submits every request
+that has anything missing (see [Slurm](slurm.md#choosing-local-or-slurm)). They then
 return the same table a local call would. If nothing is missing, nothing is
 submitted.
 

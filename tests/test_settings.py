@@ -41,7 +41,7 @@ def test_defaults_are_in_txtures_home(home):
     assert settings.cache == txh / "cache"
     assert settings.resource_store == txh / "resources" / "store"
     assert settings.hf_cache == txh / "resources" / "huggingface" / "hub"
-    assert settings.executor == "local"
+    assert settings.executor == "auto"
     assert settings.max_variants == 64
     assert all(setting.source == "default" for setting in settings.values.values())
 
