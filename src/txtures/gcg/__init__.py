@@ -37,7 +37,16 @@ import re
 from txtures.gcg import fixes, rules
 from txtures.gcg.perl import PerlString
 
-__all__ = ["ARTICLE", "GCG15_VERSION", "fail_tree", "kill_unaries", "ptb_lines", "reannotate"]
+__all__ = [
+    "mark_preterminals",
+    "remove_operators",
+    "ARTICLE",
+    "GCG15_VERSION",
+    "fail_tree",
+    "kill_unaries",
+    "ptb_lines",
+    "reannotate",
+]
 
 GCG15_VERSION = 1
 """Increment whenever `reannotate` would give any tree a different result.
@@ -116,3 +125,21 @@ def reannotate(line: str) -> str:
     result = re.sub(r"\(([^ ]*)-f[^ ]*", r"(\1", result)
     result = re.sub(r"\(([^ ]*)-l([A-Z])([^ ]*)", r"(\1\3-l\2", result)
     return result.rstrip("\n")
+
+
+def remove_operators(line: str) -> str:
+    """ModelBlocks' `.nol` step: drop `-l`/`+l` operator tags and `-x` morphology tags."""
+    line = re.sub(r"[-+]l.(?=[^\)]* )", "", line)
+    return re.sub(r"-x[^-} ][^ |]*[|][^- ]*", "", line)
+
+
+def mark_preterminals(line: str) -> str:
+    """ModelBlocks' `.prtrm` step: add `-PRTRM` to preterminals; commas become `Pc`, colons `Pk`.
+
+    A category containing a comma is cut at its first `-` after it and
+    replaced by `Pc`, and one starting with a colon by `Pk`, as the
+    Makefile's substitutions do.
+    """
+    line = re.sub(r"\(([^\(\) ]*) ([^\(\) ]*)\)", r"(\1-PRTRM \2)", line)
+    line = re.sub(r"\([^ ]*,[^ -]*", "(Pc", line)
+    return re.sub(r"\(:", "(Pk", line)
