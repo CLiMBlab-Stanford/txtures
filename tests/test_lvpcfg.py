@@ -433,3 +433,47 @@ def test_tensor_merge_matches_the_dictionary_one():
     for tag, words in l_dict.word_tag.items():
         for word, value in words.items():
             np.testing.assert_allclose(l_fast.word_tag[tag][word], value, rtol=1e-12, atol=1e-15)
+
+
+# Left-corner compilation
+
+
+def _toy_pcfg():
+    from txtures.lvpcfg.leftcorner import Pcfg
+
+    # phrases S, NP, VP; preterminals d, n, v, x (as GCG's -PRTRM tags are distinct)
+    grammar = [
+        "ROOT_0 -> S_0 1.0",
+        "S_0 -> NP_0 VP_0 0.7",
+        "S_0 -> S_0 x_0 0.3",
+        "NP_0 -> d_0 NP_0 0.4",
+        "NP_0 -> n_0 0.6",
+        "VP_0 -> VP_0 NP_0 0.5",
+        "VP_0 -> v_0 0.5",
+    ]
+    lexicon = ["n dogs [1.0]", "d the [1.0]", "v bark [1.0]", "x . [1.0]"]
+    return Pcfg.from_berkeley_text(grammar, lexicon)
+
+
+def test_left_corner_tables_are_distributions():
+    import torch
+
+    from txtures.lvpcfg import leftcorner as lc
+
+    pcfg = _toy_pcfg()
+    assert pcfg.root == {"S_0": 1.0} and pcfg.terminal["n_0"] == 1.0
+    model = lc.compile_model(pcfg.without_unaries())
+    # delta is a probability of expanding within the bound, and grows with room to expand
+    assert torch.all(model.delta <= 1 + 1e-12)
+    s = model.index["S_0"]
+    assert model.delta[4, lc.LEFT, s] < model.delta[1, lc.LEFT, s]
+    for d in range(lc.MAX_DEPTH + 1):
+        f0, f1 = lc.f_table(model, d)
+        j0, j1 = lc.j_table(model, d)
+        assert torch.all((f0 >= 0) & (f1 >= 0)) and torch.all((j0 >= 0) & (j1 >= 0))
+    # T forks to its left descendants (f = 1) at depth 0: the sentence's first word
+    f0, f1 = lc.f_table(model, 0)
+    assert f1[model.index["T"]] > 0 and f0[model.index["T"]] == 0
+    for table in (lc.b_conditional(model, 1, lc.LEFT), lc.b_conditional(model, 1, lc.RIGHT)):
+        for row in table.values():
+            assert abs(sum(row.values()) - 1) < 1e-12
