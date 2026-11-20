@@ -171,8 +171,14 @@ class Lexicon:
             for counts in words.values():
                 counts[counts < threshold] = 0.0
 
-    def score(self, word: str, tag: int, position: int, no_smoothing: bool) -> np.ndarray:
-        """`SophisticatedLexicon.score`: P(word | tag substate) for each substate."""
+    def score(
+        self, word: str, tag: int, position: int, no_smoothing: bool, is_signature: bool = False
+    ) -> np.ndarray:
+        """`SophisticatedLexicon.score`: P(word | tag substate) for each substate.
+
+        With `is_signature`, `word` is itself an unknown-word signature, scored
+        by the unseen-word model as Berkeley's text dump scores signatures.
+        """
         n = self.substates[tag]
         result = np.zeros(n)
         c_w = self.word_count.get(word, 0.0)
@@ -180,7 +186,7 @@ class Lexicon:
         tag_count = self.tag_count.get(tag, np.zeros(n))
         unseen_tag = self.unseen_tag_count.get(tag, np.zeros(n))
         for s in range(n):
-            if seen_word or no_smoothing:
+            if not is_signature and (seen_word or no_smoothing):
                 c_t = tag_count[s]
                 if c_t == 0:
                     continue
@@ -198,7 +204,7 @@ class Lexicon:
                     continue
                 p_w_t = p_t_w * (c_w / self.total) / (c_t / self.total)
             else:
-                sig = self._signature(word, position)
+                sig = word if is_signature else self._signature(word, position)
                 c_ts = self.unseen_word_tag.get(tag, {}).get(sig)
                 c_ts = 0.0 if c_ts is None else c_ts[s]
                 c_s = self.word_count.get(sig, 0.0)

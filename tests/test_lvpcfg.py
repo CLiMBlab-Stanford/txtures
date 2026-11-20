@@ -12,6 +12,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from txtures.lvpcfg.trees import Tree, annotate, escape, normalize, parse, training_tree
 
 DATA = Path(__file__).parent / "data" / "lvpcfg"
@@ -477,3 +479,164 @@ def test_left_corner_tables_are_distributions():
     for table in (lc.b_conditional(model, 1, lc.LEFT), lc.b_conditional(model, 1, lc.RIGHT)):
         for row in table.values():
             assert abs(sum(row.values()) - 1) < 1e-12
+
+
+def test_viterbi_unary_closure_takes_the_best_path_of_at_most_two_steps():
+    import numpy as np
+
+    from txtures.lvpcfg.leftcorner import viterbi_unary_closure
+
+    unary = {
+        (1, 2): np.array([[0.1]]),  # direct A -> B
+        (1, 3): np.array([[0.5]]),  # A -> C
+        (3, 2): np.array([[0.6]]),  # C -> B: A -> C -> B is 0.3, better than 0.1
+        (2, 4): np.array([[0.9]]),  # B -> D
+    }
+    closed = viterbi_unary_closure(unary, {1: 1, 2: 1, 3: 1, 4: 1})
+    assert closed[(1, 2)][0, 0] == 0.3
+    assert closed[(1, 3)][0, 0] == 0.5 and closed[(3, 2)][0, 0] == 0.6
+    # A -> B -> D (0.09) counts; A -> C -> B -> D (0.27) is three steps and does not
+    np.testing.assert_allclose(closed[(1, 4)], [[0.1 * 0.9]])
+    np.testing.assert_allclose(closed[(3, 4)], [[0.6 * 0.9]])
+
+
+def test_trained_grammar_exports_to_a_compilable_pcfg():
+    from txtures.lvpcfg import leftcorner as lc
+    from txtures.lvpcfg.resource import category_numbers
+    from txtures.lvpcfg.trees import training_tree
+
+    corpus, grammar, lexicon, _ = _toy_training()
+    trees = [training_tree(line) for line in (DATA / "trees.txt").read_text().splitlines()] * 3
+    pcfg = lc.pcfg_from_trained(category_numbers(trees), grammar, lexicon)
+    assert pcfg.root and pcfg.binary and pcfg.lexicon
+    assert all(not name.endswith("^g") and "+" not in name for name in pcfg.binary)
+    model = lc.compile_model(pcfg.without_unaries())
+    f0, f1 = lc.f_table(model, 0)
+    assert f1[model.index["T"]] > 0
+
+
+def test_synproc_model_stores_the_pcfg_and_compiles_on_load(tmp_path):
+    from txtures.lvpcfg import leftcorner as lc
+    from txtures.lvpcfg.resource import load_pcfg, save_pcfg
+
+    pcfg = _toy_pcfg()
+    save_pcfg(tmp_path, pcfg)
+    loaded = load_pcfg(tmp_path)
+    assert loaded.binary == pcfg.binary and loaded.unary == pcfg.unary
+    assert loaded.root == pcfg.root and loaded.lexicon == pcfg.lexicon
+    assert loaded.terminal == pcfg.terminal
+    a, b = lc.compile_model(pcfg.without_unaries()), lc.compile_model(loaded.without_unaries())
+    assert a.symbols == b.symbols and (a.plus == b.plus).all()
+
+
+# The synproc reference parser
+
+
+def _binary_toy_pcfg():
+    from txtures.lvpcfg.leftcorner import Pcfg
+
+    grammar = [
+        "ROOT_0 -> S_0 1.0",
+        "S_0 -> NP_0 VP_0 0.7",
+        "S_0 -> S_0 x_0 0.3",
+        "NP_0 -> d_0 n_0 0.4",
+        "NP_0 -> a_0 n_0 0.6",
+        "VP_0 -> v_0 NP_0 0.5",
+        "VP_0 -> v_0 x_0 0.5",
+    ]
+    lexicon = [
+        "d the [1.0]",
+        "n dogs [0.5]",
+        "n cats [0.5]",
+        "a big [1.0]",
+        "v see [1.0]",
+        "x . [1.0]",
+    ]
+    return Pcfg.from_berkeley_text(grammar, lexicon)
+
+
+def _inside(pcfg, words):
+    """CKY inside probability of a sentence under a binary PCFG with lexicon (brute force)."""
+    from collections import defaultdict
+
+    n = len(words)
+    chart = defaultdict(float)
+    for i, word in enumerate(words):
+        for tag, entries in pcfg.lexicon.items():
+            if word in entries:
+                chart[(i, i + 1, tag)] += pcfg.terminal.get(tag, 0) * entries[word]
+    for width in range(2, n + 1):
+        for i in range(n - width + 1):
+            k = i + width
+            for parent, rules in pcfg.binary.items():
+                for (left, right), p in rules.items():
+                    for m in range(i + 1, k):
+                        chart[(i, k, parent)] += p * chart[(i, m, left)] * chart[(m, k, right)]
+    return sum(p * chart[(0, n, c)] for c, p in pcfg.root.items())
+
+
+def test_reference_parser_sums_to_the_pcfg_inside_probability():
+    import math
+
+    from txtures.lvpcfg import leftcorner as lc
+    from txtures.lvpcfg.synproc import Tables, reference_parse
+
+    pcfg = _binary_toy_pcfg().without_unaries()
+    tables = Tables(lc.compile_model(pcfg))
+    for sentence in ("the dogs see big cats .", "big cats see the dogs", "the cats see ."):
+        words = sentence.split()
+        inside = _inside(pcfg, words)
+        assert inside > 0
+        parse = reference_parse(tables, words, beam=10**9, recombine="sum")
+        # each word's surprisal is -log2 P(w_t | w_<t); they sum to -log2 P(sentence)
+        assert abs(sum(parse.surprisal) + math.log2(inside)) < 1e-9, sentence
+
+
+def test_reference_parser_finds_the_best_sequence():
+    from txtures.lvpcfg import leftcorner as lc
+    from txtures.lvpcfg.synproc import Tables, reference_parse
+
+    tables = Tables(lc.compile_model(_binary_toy_pcfg().without_unaries()))
+    words = "the dogs see big cats .".split()
+    parse = reference_parse(tables, words, beam=50)
+    assert all(state is not None for state in parse.states)
+    tag, fork, join, store = parse.states[-1]
+    assert len(store) + fork - join == 0  # the last word's join empties the store
+    assert [tables.symbols[s[0]] for s in parse.states] == [
+        "d_0",
+        "n_0",
+        "v_0",
+        "a_0",
+        "n_0",
+        "x_0",
+    ]
+
+
+@pytest.mark.parametrize("beam", [3, 50])
+def test_batched_parser_matches_the_reference(beam):
+    import math
+
+    from txtures.lvpcfg import leftcorner as lc
+    from txtures.lvpcfg.parser import Parser
+    from txtures.lvpcfg.synproc import Tables, reference_parse
+
+    for pcfg in (_binary_toy_pcfg(), _toy_pcfg()):
+        model = lc.compile_model(pcfg.without_unaries())
+        tables = Tables(model)
+        sentences = [
+            s.split()
+            for s in (
+                "the dogs see big cats .",
+                "big cats see the dogs",
+                "the cats see .",
+                "dogs bark .",
+                "the dogs bark",
+            )
+        ]
+        sentences = [s for s in sentences if all(tables.words(w) for w in s)]
+        results = Parser(model, beam=beam, working=2).parse(sentences)
+        for words, result in zip(sentences, results, strict=True):
+            expected = reference_parse(tables, words, beam=beam)
+            for a, b in zip(result["surprisal"], expected.surprisal, strict=True):
+                assert (math.isnan(a) and math.isnan(b)) or abs(a - b) < 1e-9, (words, a, b)
+            assert result["states"] == expected.states

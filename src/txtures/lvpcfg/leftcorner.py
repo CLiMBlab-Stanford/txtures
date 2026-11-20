@@ -136,6 +136,88 @@ class Pcfg:
         return out
 
 
+def _dump_name(label: str) -> str:
+    """A category as Berkeley's dump writes it and ModelBlocks reads it: no `^g`, `-` for `+` and `&`."""
+    if label.endswith("^g"):
+        label = label[:-2]
+    return label.replace("+", "-").replace("&", "-")
+
+
+def viterbi_unary_closure(unary, substates) -> dict[tuple[int, int], np.ndarray]:
+    """Berkeley's closed Viterbi unary rules (`Grammar.computePairsOfUnaries`).
+
+    For each pair of distinct categories, each entry is the largest of the
+    direct rule's weight and, over intermediate categories and their
+    substates, the product of two rules' weights. Pairs with no positive
+    entry have no rule.
+    """
+    children: dict[int, list[int]] = defaultdict(list)
+    for parent, child in unary:
+        children[parent].append(child)
+    closed = {}
+    for parent in list(children):
+        candidates: dict[int, np.ndarray] = {}
+        for middle in children[parent]:
+            first = unary[(parent, middle)]
+            if parent != middle:
+                best = candidates.get(middle)
+                candidates[middle] = first.copy() if best is None else np.maximum(best, first)
+            for child in children.get(middle, []):
+                if child == parent:
+                    continue
+                second = unary[(middle, child)]
+                two_steps = (first[:, :, None] * second[None, :, :]).max(axis=1)
+                best = candidates.get(child)
+                candidates[child] = two_steps if best is None else np.maximum(best, two_steps)
+        for child, values in candidates.items():
+            if child != parent and np.any(values > 0):
+                closed[(parent, child)] = values
+    return closed
+
+
+def pcfg_from_trained(categories: dict[str, int], grammar, lexicon) -> Pcfg:
+    """The `Pcfg` that `from_berkeley_text` would read from Berkeley's dump of this grammar.
+
+    Binary rules with a positive weight, the Viterbi closure of the unary
+    rules, and each seen word scored with smoothing at position 0 and each
+    unknown-word signature by the unseen-word model, as
+    `WriteGrammarToTextFile` writes them.
+    """
+    names = {number: _dump_name(label) for label, number in categories.items()}
+    root = categories["ROOT"]
+    pcfg = Pcfg()
+    for (a, b, c), weights in grammar.binary.items():
+        for (i, j, k), p in np.ndenumerate(weights):
+            if p > 0:
+                pcfg.binary[f"{names[a]}_{i}"][(f"{names[b]}_{j}", f"{names[c]}_{k}")] = float(p)
+    for (a, b), weights in viterbi_unary_closure(grammar.unary, grammar.substates).items():
+        for (i, j), p in np.ndenumerate(weights):
+            if p <= 0:
+                continue
+            parent, child = f"{names[a]}_{i}", f"{names[b]}_{j}"
+            if a == root:
+                pcfg.root[child] = float(p)
+            elif parent != child:
+                pcfg.unary[parent][child] = float(p)
+    for tag, words in lexicon.word_tag.items():
+        for word in words:
+            _add_scores(pcfg, names[tag], word, lexicon.score(word, tag, 0, no_smoothing=False))
+    for tag, signatures in lexicon.unseen_word_tag.items():
+        for sig in signatures:
+            scores = lexicon.score(sig, tag, 0, no_smoothing=False, is_signature=True)
+            _add_scores(pcfg, names[tag], sig, scores)
+    return pcfg
+
+
+def _add_scores(pcfg: Pcfg, tag: str, word: str, scores: np.ndarray) -> None:
+    word = word.replace("+", "-")  # ModelBlocks' sed applies to whole lines
+    for k, value in enumerate(scores):
+        if np.isnan(value):
+            continue
+        pcfg.terminal[f"{tag}_{k}"] = 1.0
+        pcfg.lexicon[f"{tag}_{k}"][word] = float(value)
+
+
 @dataclass
 class Compiled:
     """synproc's depth-bounded left-corner model as factors over symbol indices."""

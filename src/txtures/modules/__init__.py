@@ -52,7 +52,7 @@ def resource_class(kind: str) -> type[Resource]:
         KeyError: No loaded resource class has this kind.
     """
     import txtures.gcg.treebank  # noqa: F401 - defines the gcg_treebank resource
-    import txtures.lvpcfg.resource  # noqa: F401 - defines the lvpcfg_grammar resource
+    import txtures.lvpcfg.resource  # noqa: F401 - defines lvpcfg_grammar and synproc_model
     import txtures.tools  # noqa: F401 - defines the tools_image resource
 
     pending, found = list(Resource.__subclasses__()), {}

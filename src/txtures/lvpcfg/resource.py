@@ -101,6 +101,7 @@ class LvpcfgGrammar(Resource):
             merge_rule=resolved["merge_rule"],
             updates=tuple(resolved["updates"]),
             device=_device(context),
+            progress=lambda message: print(message, flush=True),
         )
         save(
             directory,
@@ -257,3 +258,116 @@ def load(directory: Path) -> TrainedGrammar:
     lexicon.total, lexicon.total_unseen = info["total"], info["total_unseen"]
     training = json.loads((directory / "training.json").read_text(encoding="utf-8"))
     return TrainedGrammar(meta["categories"], grammar, lexicon, split_trees, training)
+
+
+# The compiled left-corner model
+
+
+@dataclass
+class LoadedSynprocModel:
+    """A loaded `synproc_model`: the exported PCFG and its compiled left-corner factors."""
+
+    pcfg: Any  # txtures.lvpcfg.leftcorner.Pcfg, before folding unaries
+    compiled: Any  # txtures.lvpcfg.leftcorner.Compiled
+
+
+class SynprocModel(Resource):
+    """synproc's depth-bounded left-corner model of an `lvpcfg_grammar`.
+
+    Spec keys: `grammar` (the `lvpcfg_grammar` spec). The resource stores
+    the grammar exported as Berkeley's text dump would hold it
+    (`leftcorner.pcfg_from_trained`): binary rules, the Viterbi unary
+    closure, the root's rules, and the lexicon, about 1% of the size of
+    ModelBlocks' text model. Loading folds the unaries and compiles the
+    left-corner factors (`leftcorner.compile_model`), a few seconds on a GPU.
+    """
+
+    kind = "synproc_model"
+    version = 1
+
+    def dependencies(self) -> Mapping[str, Resource]:
+        return {"grammar": LvpcfgGrammar(self.spec.get("grammar", {}))}
+
+    def resolve(self, context: RunContext) -> dict[str, Any]:
+        from txtures.lvpcfg import leftcorner as lc
+
+        return {"max_depth": lc.MAX_DEPTH, "iterations": lc.ITERATIONS}
+
+    def workload(self, resolved: Mapping[str, Any]) -> Workload:
+        return Workload(slurm=True, ncores=2, memory_gb=16, time_hours=1, ngpus=0)
+
+    def build(self, resolved, directory: Path, context: RunContext, dependencies) -> None:
+        from txtures.lvpcfg import leftcorner as lc
+
+        trained = dependencies["grammar"]
+        pcfg = lc.pcfg_from_trained(trained.categories, trained.grammar, trained.lexicon)
+        save_pcfg(directory, pcfg)
+
+    def load(
+        self, resolved, directory: Path, context: RunContext, dependencies
+    ) -> LoadedSynprocModel:
+        from txtures.lvpcfg import leftcorner as lc
+
+        pcfg = load_pcfg(directory)
+        return LoadedSynprocModel(pcfg, lc.compile_model(pcfg.without_unaries(), _device(context)))
+
+
+def save_pcfg(directory: Path, pcfg) -> None:
+    """Store a `Pcfg` as `pcfg.npz` (indices and weights) and `pcfg.json` (names)."""
+    symbols = sorted(
+        set(pcfg.binary)
+        | {s for m in pcfg.binary.values() for pair in m for s in pair}
+        | set(pcfg.unary)
+        | {c for m in pcfg.unary.values() for c in m}
+        | set(pcfg.root)
+        | set(pcfg.lexicon)
+        | set(pcfg.terminal)
+    )
+    index = {s: i for i, s in enumerate(symbols)}
+    words = sorted({w for m in pcfg.lexicon.values() for w in m})
+    word_index = {w: i for i, w in enumerate(words)}
+
+    def table(rows) -> np.ndarray:
+        return np.array(rows, dtype=np.int32).reshape(len(rows), -1)
+
+    binary = [
+        (index[p], index[a], index[b], w) for p, m in pcfg.binary.items() for (a, b), w in m.items()
+    ]
+    unary = [(index[p], index[c], w) for p, m in pcfg.unary.items() for c, w in m.items()]
+    lexicon = [(index[t], word_index[w], v) for t, m in pcfg.lexicon.items() for w, v in m.items()]
+    np.savez_compressed(
+        directory / "pcfg.npz",
+        binary=table([r[:3] for r in binary]),
+        binary_weight=np.array([r[3] for r in binary]),
+        unary=table([r[:2] for r in unary]),
+        unary_weight=np.array([r[2] for r in unary]),
+        root=np.array([index[c] for c in pcfg.root], dtype=np.int32),
+        root_weight=np.array(list(pcfg.root.values())),
+        lexicon=table([r[:2] for r in lexicon]),
+        lexicon_weight=np.array([r[2] for r in lexicon]),
+        terminal=np.array([index[s] for s in pcfg.terminal], dtype=np.int32),
+        terminal_weight=np.array(list(pcfg.terminal.values())),
+    )
+    write_json(directory / "pcfg.json", {"symbols": symbols, "words": words})
+
+
+def load_pcfg(directory: Path):
+    from txtures.lvpcfg.leftcorner import Pcfg
+
+    names = json.loads((directory / "pcfg.json").read_text(encoding="utf-8"))
+    symbols, words = names["symbols"], names["words"]
+    data = np.load(directory / "pcfg.npz")
+    pcfg = Pcfg()
+    for (p, a, b), w in zip(data["binary"], data["binary_weight"], strict=True):
+        pcfg.binary[symbols[p]][(symbols[a], symbols[b])] = float(w)
+    for (p, c), w in zip(data["unary"], data["unary_weight"], strict=True):
+        pcfg.unary[symbols[p]][symbols[c]] = float(w)
+    pcfg.root = {
+        symbols[c]: float(w) for c, w in zip(data["root"], data["root_weight"], strict=True)
+    }
+    for (t, w), v in zip(data["lexicon"], data["lexicon_weight"], strict=True):
+        pcfg.lexicon[symbols[t]][words[w]] = float(v)
+    pcfg.terminal = {
+        symbols[s]: float(w) for s, w in zip(data["terminal"], data["terminal_weight"], strict=True)
+    }
+    return pcfg
