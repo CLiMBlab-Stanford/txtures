@@ -1,0 +1,34 @@
+{
+ "target": "ngram_corpus",
+ "values": {
+  "first_lines": [
+   "the horse raced past the cat .",
+   "the bird raced past the horse .",
+   "the bird raced past the bird .",
+   "the barn chased the barn .",
+   "the dog liked the dog .",
+   "the cat liked the barn .",
+   "the man chased the bird .",
+   "the cat saw the man .",
+   "the bird raced past the barn .",
+   "the cat liked the horse .",
+   "the bird chased the barn .",
+   "the horse raced past the barn .",
+   "the bird saw the barn .",
+   "the cat saw the man .",
+   "the horse saw the barn .",
+   "the horse liked the dog .",
+   "the man liked the man .",
+   "the cat chased the barn .",
+   "the dog chased the dog .",
+   "the barn raced past the cat ."
+  ],
+  "lines": 600,
+  "properties": {
+   "documents": 300,
+   "sentences": 600,
+   "tokens": 3749
+  }
+ },
+ "version": 1
+}

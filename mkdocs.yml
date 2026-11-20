@@ -13,9 +13,15 @@ nav:
   - Inputs: inputs.md
   - Definitions: definitions.md
   - Surprisal: surprisal.md
+  - N-gram surprisal: ngram.md
+  - Word length: word-length.md
+  - Parsing: parsing.md
+  - Dependency locality: dependency-locality.md
+  - GCG treebank: gcg.md
   - Output tables: outputs.md
   - Settings: settings.md
   - Slurm: slurm.md
+  - Tools: tools.md
   - Python API: python.md
 markdown_extensions:
   - toc:

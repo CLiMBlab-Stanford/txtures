@@ -1,0 +1,8 @@
+( (S (NP-SBJ (DT The) (NN horse)) (VP (VBD raced) (PP-DIR (IN past) (NP (DT the) (NN barn)))) (. .)) )
+( (S (NP-SBJ (DT The) (NN reporter) (SBAR (WHNP-1 (WP who)) (S (NP-SBJ (DT the) (NN senator)) (VP (VBD attacked) (NP (-NONE- *T*-1)))))) (VP (VBD admitted) (NP (DT the) (NN error))) (. .)) )
+( (S (NP-SBJ-1 (PRP She)) (VP (VBD wanted) (S (NP-SBJ (-NONE- *-1)) (VP (TO to) (VP (VB leave) (ADVP-TMP (RB early)))))) (. .)) )
+( (S (NP-SBJ (NNS Prices)) (VP (VBD rose) (CC and) (VBD fell)) (. .)) )
+( (S (NP-SBJ (DT The) (NN plan)) (VP (VBD was) (VP (VBN approved) (NP (-NONE- *-1)) (PP (IN by) (NP-LGS (DT the) (NN board))))) (. .)) )
+( (SQ (VBZ Is) (NP-SBJ (PRP it)) (ADJP-PRD (JJ ready)) (. ?)) )
+( (FRAG (NP (JJ Good) (NNS news)) (. !)) )
+( (S (NP-SBJ (NNP John)) (VP (VBZ thinks) (SBAR (IN that) (S (NP-SBJ (NNP Mary)) (VP (VBZ sings))))) (. .)) )

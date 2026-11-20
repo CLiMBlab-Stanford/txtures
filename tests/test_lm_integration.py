@@ -26,7 +26,7 @@ from txtures.modules.hf_model import (
 from txtures.modules.lm_scores import LMScores, LMScoresConfig
 from txtures.modules.surprisal import Surprisal, SurprisalConfig, region_tokens
 
-pytestmark = pytest.mark.integration
+pytestmark = [pytest.mark.integration, pytest.mark.heavy]
 
 GPT2_REVISION = "607a30d783dfa663caf39e06633721c8d4cfcd7e"
 PYTHIA_REVISION = "a39f36b100fe8a5377810d56c3f4789b9c53ac42"

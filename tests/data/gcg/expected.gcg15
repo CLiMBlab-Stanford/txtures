@@ -1,0 +1,9 @@
+!ARTICLE
+(S-lS (S (N-lA (N-b{N-aD} The) (N-aD-lA (N-aD horse))) (V-aN (V-aN raced) (R-aN-lM (R-aN-bN past) (N-lA (N-b{N-aD} the) (N-aD-lA (N-aD barn)))))) (.-lM (. .)))
+(S-lS (S (N-lA (N (N-b{N-aD} The) (N-aD-lA (N-aD reporter))) (C-rN-lN (N-rN-lN (N-rN who)) (V-gN (N-lA (N-b{N-aD} the) (N-aD-lA (N-aD senator))) (V-aN-gN (V-aN-bN attacked))))) (V-aN (V-aN-bN admitted) (N-lA (N-b{N-aD} the) (N-aD-lA (N-aD error))))) (.-lM (. .)))
+(S-lS (S (N-lA (N She)) (V-aN (V-aN-b{I-aN} wanted) (I-aN-lA (I-aN-b{B-aN} to) (B-aN-lA (B-aN leave) (R-aN-lM (R-aN early)))))) (.-lM (. .)))
+(S-lS (S (N-lA (N-aD Prices)) (V-aN (V-aN-lC (V-aN rose)) (V-aN-c{V-aN} (X-cX-dX and) (V-aN-lC (V-aN fell))))) (.-lM (. .)))
+(S-lS (S (N-lA (N-b{N-aD} The) (N-aD-lA (N-aD plan))) (V-aN (V-aN-b{A-aN} was) (A-aN-lA (L-aN-vN (L-aN-bN approved)) (R-aN-lM (R-aN-bN by) (N-lA (N-b{N-aD} the) (N-aD-lA (N-aD board))))))) (.-lM (. .)))
+(S-lS (S (Q-b{A-aN} (Q-b{A-aN}-bN (V-aN-b{A-aN} Is)) (N-lA (N it))) (A-aN-lA (A-aN ready))) (.-lM (. ?)))
+(FAIL (FAIL Good) (FAIL (FAIL news) (FAIL !)))
+(S-lS (S (N-lA (N John)) (V-aN (V-aN-bC thinks) (C-lA (C-bV that) (V-lA (N-lA (N Mary)) (V-aN sings))))) (.-lM (. .)))

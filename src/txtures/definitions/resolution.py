@@ -56,6 +56,24 @@ class Label:
     module: str
     source: str
     value: str
+    full: str | None = None
+    """A longer form of `value`, used when `value` would give two columns one name."""
+
+
+def derive_full_label(key: str, value: Any) -> str | None:
+    """The longer label of an identifying string value: every `/`-separated
+    component of a hub name (the last two of a path), cleaned as by
+    `derive_label` and joined with `_`, as in `EleutherAI_pythia410m`."""
+    if not isinstance(value, str):
+        return None
+    parts = [re.sub(r"[^A-Za-z0-9]", "", part) for part in value.split("/")]
+    parts = [part for part in parts if part]
+    if value.startswith("/"):
+        parts = parts[-2:]
+    label = "_".join(parts)
+    if not label[:1].isalpha():
+        label = f"{key}{label}"
+    return label if LABEL_PATTERN.fullmatch(label) else None
 
 
 def derive_label(key: str, value: Any) -> str:
@@ -203,13 +221,14 @@ def parse_config(module: type[Module], config_id: str, body: Mapping[str, Any], 
 
     ordered = [sweeps[key] for key in module.sweeps if key in sweeps]
     variants: list[ConfigVariant] = []
+    keys = [*module.sweeps, *(k for k in module.identifying if k not in module.sweeps)]
     for combination in itertools.product(*(sweep.entries for sweep in ordered)):
         values = dict(fixed)
-        labels: list[Label] = []
+        swept: dict[str, Label] = {}
         for sweep, (label, fields) in zip(ordered, combination, strict=True):
             values.update(fields)
             if len(sweep.entries) > 1:
-                labels.append(Label(module.name, sweep.key, label))
+                swept[sweep.key] = Label(module.name, sweep.key, label)
         try:
             config = module.Config.model_validate(values)
         except ValidationError as error:
@@ -218,6 +237,22 @@ def parse_config(module: type[Module], config_id: str, body: Mapping[str, Any], 
                 problems.append(Problem(location, f"{message}{suffix}"))
             problems.extend(_unsweepable_hints(module, fixed, location))
             continue
+        labels: list[Label] = []
+        for key in keys:
+            if key in swept:
+                label = swept[key]
+                if key in module.identifying:
+                    full = derive_full_label(key, getattr(config, key))
+                    label = Label(module.name, key, label.value, full)
+                labels.append(label)
+            elif key in module.identifying:
+                value = getattr(config, key)
+                try:
+                    short = derive_label(key, value)
+                except ValueError as error:
+                    problems.append(Problem(location, str(error)))
+                    continue
+                labels.append(Label(module.name, key, short, derive_full_label(key, value)))
         variants.append(ConfigVariant(config, tuple(labels)))
     if problems:
         raise DefinitionError(problems)
@@ -264,14 +299,32 @@ class Expansion:
     variants: Mapping[str, tuple[Variant, ...]]
 
     def columns(self, registry: Registry = REGISTRY) -> tuple[Column, ...]:
-        """Return the feature columns of the requested modules, in request order."""
-        columns = []
-        for module in self.requested:
-            for variant in self.variants[module]:
-                suffix = "".join(f"_{label.value}" for label in variant.labels)
-                for feature in registry[module].features:
-                    columns.append(Column(f"{feature}{suffix}", feature, variant))
-        return tuple(columns)
+        """Return the feature columns of the requested modules, in request order.
+
+        A column's name is its feature followed by its variant's labels.
+        Where two columns would share a name, those columns use the longer
+        form of their identifying labels, such as `EleutherAI_pythia410m`
+        for `pythia410m`.
+        """
+
+        def name(feature: str, variant: Variant, full: bool) -> str:
+            parts = [
+                (label.full if full and label.full else label.value) for label in variant.labels
+            ]
+            return feature + "".join(f"_{part}" for part in parts)
+
+        pairs = [
+            (feature, variant)
+            for module in self.requested
+            for variant in self.variants[module]
+            for feature in registry[module].features
+        ]
+        short = [name(feature, variant, False) for feature, variant in pairs]
+        clashing = {n for n in short if short.count(n) > 1}
+        return tuple(
+            Column(name(feature, variant, n in clashing), feature, variant)
+            for (feature, variant), n in zip(pairs, short, strict=True)
+        )
 
 
 def variant_digest(module: type[Module], config: ModuleConfig, upstream: Mapping[str, Variant]):
@@ -513,12 +566,23 @@ class Definitions:
                 for resolved in configs[name]:
                     id_label = (Label(name, "config", resolved.id),) if label_ids else ()
                     for config_variant in resolved.variants:
+                        own = config_variant.labels
+                        if label_ids:
+                            # A config named after its model needs no second model label.
+                            own = tuple(
+                                label
+                                for label in own
+                                if not (
+                                    label.source in module.identifying
+                                    and label.value == resolved.id
+                                )
+                            )
                         value = variant_digest(module, config_variant.config, by_module)
                         labels = _merge_labels(
                             [
                                 *(variant.labels for variant in upstream),
                                 id_label,
-                                config_variant.labels,
+                                own,
                             ]
                         )
                         found.append(

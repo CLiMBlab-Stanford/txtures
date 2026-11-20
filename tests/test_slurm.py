@@ -16,6 +16,16 @@ from txtures.cli import main
 from txtures.engine import slurm as slurm_jobs
 from txtures.engine.slurm import Slurm, batch_script, summarize
 from txtures.errors import TxturesError
+from txtures.modules import Workload
+
+
+def on_slurm(self, spec):
+    return Workload(slurm=True)
+
+
+def here(self, spec):
+    return Workload()
+
 
 SLURM = {
     "partition": "gpu",
@@ -316,7 +326,7 @@ def test_local_flag_and_workers_option(capsys, fake_slurm):
     assert "wrote " in capsys.readouterr().out
     assert fake_slurm.scripts == []
     assert main(["run", "doc", "--local", "--workers", "2"]) == 1
-    assert "--workers applies only to Slurm" in capsys.readouterr().err
+    assert "--nworkers applies only to Slurm" in capsys.readouterr().err
 
 
 # Through the Python API, with a fake Slurm that runs the tasks
@@ -491,43 +501,46 @@ def test_api_workers_need_slurm(api_slurm):
 
 @pytest.fixture
 def auto_site(api_slurm, monkeypatch):
-    """A site whose executor is auto, on a host with sbatch, where fake_scores is intensive."""
+    """A site whose executor is auto, on a host with sbatch, where fake_scores runs on Slurm."""
     write(
         Path(os.environ["TXTURES_HOME"]) / "site.yml",
         "execution:\n  executor: auto\nslurm:\n  partition: gpu\n",
     )
     monkeypatch.setattr(slurm_jobs.shutil, "which", lambda name: f"/usr/bin/{name}")
-    monkeypatch.setattr(fake_modules.FakeScores, "intensive", True)
+    monkeypatch.setattr(fake_modules.FakeScores, "workload", on_slurm)
     return api_slurm
 
 
-def test_lm_scores_is_intensive_and_surprisal_is_not():
+def test_lm_scores_and_parse_run_on_slurm_and_surprisal_does_not():
     from txtures.modules import REGISTRY
 
-    assert REGISTRY["lm_scores"].intensive
-    assert not REGISTRY["surprisal"].intensive
+    for name, expected in (("lm_scores", True), ("parse", True), ("surprisal", False)):
+        module = REGISTRY[name]()
+        assert module.workload(module.Config()).slurm is expected
 
 
 @pytest.mark.filterwarnings("ignore:.*revision is not pinned:UserWarning")
-def test_auto_submits_only_while_intensive_work_is_missing(auto_site):
+def test_auto_submits_only_while_slurm_work_is_missing(auto_site):
     import txtures as tx
 
     messages = []
     tx.compute("fake_feature", "a bb", progress=messages.append)
     assert messages[0] == "submitting to Slurm: fake_scores results are missing"
-    assert len(auto_site.scripts) == 1
+    # A CPU job builds the resource the GPU work needs; text needs no CPU job.
+    build, gpu = auto_site.scripts
+    assert "--gres" not in build and "#SBATCH --gres=gpu:1" in gpu
 
     messages = []
     table = tx.compute("fake_feature", "a bb", progress=messages.append)
     assert list(table["length"]) == [1.0, 2.0]
-    assert messages == [] and len(auto_site.scripts) == 1
+    assert messages == [] and len(auto_site.scripts) == 2
 
 
 @pytest.mark.filterwarnings("ignore:.*revision is not pinned:UserWarning")
 def test_auto_computes_light_work_here(auto_site, monkeypatch):
     import txtures as tx
 
-    monkeypatch.setattr(fake_modules.FakeScores, "intensive", False)
+    monkeypatch.setattr(fake_modules.FakeScores, "workload", here)
     messages = []
     tx.compute("fake_feature", "a bb", workers=2, progress=messages.append)
     assert not any("Slurm" in message for message in messages)
@@ -560,9 +573,10 @@ def test_auto_through_the_command_line(capsys, auto_site, fake_engine):  # noqa:
     assert main(["run", "doc", "--workers", "2"]) == 0
     captured = capsys.readouterr()
     assert "note: submitting to Slurm: fake_scores results are missing" in captured.err
-    assert "submitted job 42 (2 tasks)" in captured.out
+    assert "submitted job 43 (2 GPU tasks) for the GPU work" in captured.out
+    assert "submitted job 44 (1 task) to write" in captured.out
     assert main(["run", "doc", "--local", "--workers", "2"]) == 1
-    assert "--workers applies only to Slurm" in capsys.readouterr().err
+    assert "--nworkers applies only to Slurm" in capsys.readouterr().err
 
 
 # On a real cluster
@@ -604,7 +618,7 @@ def test_real_slurm_job(tmp_path):
         }
         txtures = [sys.executable, "-I", "-m", "txtures"]
         submitted = subprocess.run(
-            [*txtures, "run", "doc", "-w", "toy", "--workers", "2"],
+            [*txtures, "run", "doc", "-w", "toy", "-m", "surprisal", "--workers", "2"],
             env=env,
             capture_output=True,
             text=True,
@@ -696,3 +710,361 @@ def test_real_slurm_compute(tmp_path):
         assert logs.count("computed the items of") == 2
     finally:
         shutil.rmtree(root, ignore_errors=True)
+
+
+# Resources built on Slurm
+
+
+@pytest.fixture
+def slurm_weights(monkeypatch, fake_slurm):
+    """Make the fake engine's resource build on Slurm, with needs of its own."""
+    monkeypatch.setattr(
+        fake_modules.Weights,
+        "workload",
+        lambda self, resolved: Workload(
+            slurm=True, ncores=16, memory_gb=200, time_hours=48, ngpus=0
+        ),
+    )
+    write(
+        Path(os.environ["TXTURES_HOME"]) / "site.yml",
+        "execution:\n  executor: slurm\n"
+        "slurm:\n  partition: gpu\n  cpu_partition: cpu\n  workers: 2\n",
+    )
+    return fake_slurm
+
+
+def test_slurm_resource_is_built_by_its_own_job_first(
+    capsys,
+    slurm_weights,
+    fake_engine,  # noqa: F811
+):
+    assert main(["run", "doc"]) == 0
+    out = capsys.readouterr().out
+    assert "submitted job 42 to build resource fake_weights" in out
+    assert "submitted job 43 (2 tasks)" in out and "after the builds" in out
+    build, request = slurm_weights.scripts
+    assert "#SBATCH --partition=cpu" in build
+    assert "#SBATCH --mem=200G" in build and "#SBATCH --cpus-per-task=16" in build
+    assert "#SBATCH --time=2880" in build and "--gres" not in build
+    # No module here needs a GPU, so the request's job runs on CPUs.
+    assert "#SBATCH --partition=cpu" in request and "--gres" not in request
+    assert "#SBATCH --dependency=afterok:42" in request
+    assert "#SBATCH --kill-on-invalid-dep=yes" in request
+
+    jobs = {job.job_id: job for job in slurm_jobs.jobs(fake_engine / "outputs")}
+    assert jobs["42"].source == "resource"
+    assert jobs["43"].request["builds"][0]["job_id"] == "42"
+    assert main(["worker", str(jobs["42"].directory), "0"]) == 0
+    assert "built resource fake_weights" in capsys.readouterr().out
+    assert fake_modules.CALLS["build"] == 1
+    assert main(["worker", str(jobs["43"].directory), "0"]) == 0
+    assert main(["worker", str(jobs["43"].directory), "1"]) == 0
+    assert fake_modules.CALLS["build"] == 1
+    assert main(["status"]) == 0
+    assert "job 42  resources/fake_weights-" in capsys.readouterr().out
+
+
+def test_build_task_refuses_a_resource_that_builds_differently(
+    capsys,
+    slurm_weights,
+    fake_engine,  # noqa: F811
+):
+    assert main(["run", "doc"]) == 0
+    build = next(j for j in slurm_jobs.jobs(fake_engine / "outputs") if j.source == "resource")
+    request = json.loads((build.directory / "request.json").read_text())
+    request["resolved"]["scale"] = 99
+    (build.directory / "request.json").write_text(json.dumps(request))
+    capsys.readouterr()
+    assert main(["worker", str(build.directory), "0"]) == 1
+    assert "builds differently" in capsys.readouterr().err
+
+
+def test_an_active_build_job_is_reused(slurm_weights, fake_engine):  # noqa: F811
+    from txtures.settings import resolve_settings
+
+    assert main(["run", "doc"]) == 0
+    slurm_weights.task_states = {"42": "RUNNING"}
+    settings = resolve_settings({})
+    resource = fake_resource(settings)
+    assert slurm_jobs.submit_build(resource, settings, slurm_weights).job_id == "42"
+    assert len(slurm_weights.scripts) == 2
+
+
+def fake_resource(settings):
+    from txtures import api
+    from txtures.engine import plan_request
+
+    plan = plan_request(settings, api.load_definitions(settings), "doc", "main", None)
+    (resource,) = plan.resources()
+    return resource
+
+
+def test_job_options_follow_workloads(slurm_weights, fake_engine):  # noqa: F811
+    from txtures.settings import resolve_settings
+
+    settings = resolve_settings({})
+    options = slurm_jobs.job_options(settings, [Workload(slurm=True, ncores=16, ngpus=0)])
+    assert (options["partition"], options["gpus"], options["cpus"]) == ("cpu", 0, 16)
+    options = slurm_jobs.job_options(settings, [Workload(slurm=True, ngpus=2)])
+    assert (options["partition"], options["gpus"]) == ("gpu", 2)
+    assert options["memory_gb"] == settings["slurm.memory_gb"]
+    # The largest need wins; fields of workloads not on Slurm are ignored.
+    options = slurm_jobs.job_options(
+        settings,
+        [
+            Workload(slurm=True, memory_gb=64),
+            Workload(slurm=True, memory_gb=128),
+            Workload(memory_gb=999),
+        ],
+    )
+    assert options["memory_gb"] == 128
+    assert slurm_jobs.job_options(settings, [])["cpus"] == settings["slurm.cpus"]
+
+
+def test_request_array_follows_module_workloads(
+    capsys,
+    monkeypatch,
+    fake_slurm,
+    fake_engine,  # noqa: F811
+):
+    monkeypatch.setattr(
+        fake_modules.FakeScores,
+        "workload",
+        lambda self, config: Workload(slurm=True, memory_gb=96, time_hours=3),
+    )
+    assert main(["run", "doc"]) == 0
+    _, gpu, tables = fake_slurm.scripts
+    assert "#SBATCH --mem=96G" in gpu and "#SBATCH --time=180" in gpu
+    assert "#SBATCH --gres=gpu:1" in gpu and "--gres" not in tables
+
+
+def test_resources_build_submits_slurm_resources(
+    capsys,
+    monkeypatch,
+    slurm_weights,
+    fake_engine,  # noqa: F811
+):
+    monkeypatch.setattr(slurm_jobs.shutil, "which", lambda name: f"/usr/bin/{name}")
+    assert main(["resources", "build", "doc"]) == 0
+    assert "job 42 builds resource fake_weights" in capsys.readouterr().out
+    assert len(slurm_weights.scripts) == 1 and fake_modules.CALLS["build"] == 0
+    assert main(["resources", "build", "doc", "--local"]) == 0
+    assert "built resource fake_weights" in capsys.readouterr().out
+    assert fake_modules.CALLS["build"] == 1
+    assert main(["resources", "build", "doc"]) == 0
+    assert "every resource is already built" in capsys.readouterr().out
+
+
+def test_resources_build_builds_light_resources_here(
+    capsys,
+    monkeypatch,
+    fake_slurm,
+    fake_engine,  # noqa: F811
+):
+    monkeypatch.setattr(slurm_jobs.shutil, "which", lambda name: f"/usr/bin/{name}")
+    assert main(["resources", "build", "doc"]) == 0
+    assert "built resource fake_weights" in capsys.readouterr().out
+    assert fake_slurm.scripts == []
+
+
+@pytest.mark.filterwarnings("ignore:.*revision is not pinned:UserWarning")
+def test_auto_submits_while_a_slurm_resource_is_missing(auto_site, monkeypatch):
+    import txtures as tx
+
+    monkeypatch.setattr(fake_modules.FakeScores, "workload", here)
+    monkeypatch.setattr(fake_modules.Weights, "workload", on_slurm)
+    messages = []
+    tx.compute("fake_feature", "a bb", progress=messages.append)
+    assert messages[0] == "submitting to Slurm: resource fake_weights is missing"
+    assert len(auto_site.scripts) == 2
+
+
+def test_a_build_without_slurm_is_announced(fake_engine, monkeypatch):  # noqa: F811
+    from txtures.settings import resolve_settings
+    from txtures.store import EntryStore
+
+    monkeypatch.setattr(slurm_jobs.shutil, "which", lambda name: None)
+    monkeypatch.setattr(fake_modules.Weights, "workload", on_slurm)
+    from txtures import api
+    from txtures.engine import plan_request
+
+    settings = resolve_settings({})
+    planned = plan_request(settings, api.load_definitions(settings), "doc", "main", None)
+    decision = slurm_jobs.decide(settings, False, planned, EntryStore(settings.cache))
+    assert decision == slurm_jobs.Decision(
+        False, "building resource fake_weights here: Slurm is not set up"
+    )
+
+
+def test_dependency_with_a_slurm_workload_gets_its_own_build_job(
+    capsys,
+    monkeypatch,
+    fake_slurm,
+    fake_engine,  # noqa: F811
+):
+    from test_tools import BUILT, Base, Derived
+
+    from txtures.engine.planning import plan_resource
+    from txtures.modules import RunContext
+    from txtures.settings import resolve_settings
+
+    monkeypatch.setattr(Base, "workload", on_slurm)
+    settings = resolve_settings({})
+    planned = plan_resource("derived", Derived({"n": 1}), RunContext())
+    job = slurm_jobs.submit_build(planned, settings, fake_slurm)
+    base_script, derived_script = fake_slurm.scripts
+    assert "--dependency" not in base_script
+    assert "#SBATCH --dependency=afterok:42" in derived_script
+    assert job.job_id == "43" and job.request["after"] == ["42"]
+    BUILT.clear()
+    base_job = slurm_jobs.read_job(
+        slurm_jobs.build_directory(settings.outputs, planned.dependencies["base"])
+    )
+    assert main(["worker", str(base_job.directory), "0"]) == 0
+    assert main(["worker", str(job.directory), "0"]) == 0
+    assert BUILT == ["base", "derived"]
+    assert "built resource test_derived" in capsys.readouterr().out
+
+
+# Per-call job sizes
+
+
+def test_a_per_call_size_overrides_workloads_and_settings(slurm_weights, fake_engine):  # noqa: F811
+    from txtures.settings import resolve_settings
+
+    settings = resolve_settings({})
+    declared = [Workload(slurm=True, ngpus=2, memory_gb=200)]
+    options = slurm_jobs.job_options(settings, declared, slurm_jobs.size({"ngpus": 0}))
+    assert (options["gpus"], options["partition"], options["memory_gb"]) == (0, "cpu", 200)
+    assert slurm_jobs.size(None) is None and slurm_jobs.size({}) is None
+    with pytest.raises(TxturesError, match="unknown job size gpus"):
+        slurm_jobs.size({"gpus": 0})
+    with pytest.raises(TxturesError, match="ncores must be a whole number of at least 1"):
+        slurm_jobs.size({"ncores": 0})
+    with pytest.raises(TxturesError, match="ngpus must be"):
+        slurm_jobs.size({"ngpus": True})
+
+
+def test_size_flags_shape_every_job_a_run_submits(capsys, slurm_weights, fake_engine):  # noqa: F811
+    assert main(["run", "doc", "--ngpus", "0", "--memory-gb", "8", "--time-hours", "1"]) == 0
+    build, request = slurm_weights.scripts
+    for script in (build, request):
+        assert "#SBATCH --mem=8G" in script and "#SBATCH --time=60" in script
+        assert "--gres" not in script and "#SBATCH --partition=cpu" in script
+
+
+@pytest.mark.filterwarnings("ignore:.*revision is not pinned:UserWarning")
+def test_api_size_applies_to_submitted_jobs(auto_site):
+    import txtures as tx
+
+    tx.compute("fake_feature", "a bb", slurm={"ncores": 12, "ngpus": 0})
+    (script,) = auto_site.scripts
+    assert "#SBATCH --cpus-per-task=12" in script and "--gres" not in script
+    with pytest.raises(TxturesError, match="unknown job size"):
+        tx.compute("fake_feature", "a", slurm={"cpus": 2})
+
+
+# GPU work in a job of its own
+
+
+@pytest.fixture
+def gpu_site(monkeypatch, fake_slurm):
+    """fake_scores needs a GPU; the site has a CPU partition."""
+    monkeypatch.setattr(fake_modules.FakeScores, "workload", on_slurm)
+    write(
+        Path(os.environ["TXTURES_HOME"]) / "site.yml",
+        "execution:\n  executor: slurm\n"
+        "slurm:\n  partition: gpu\n  cpu_partition: cpu\n  workers: 2\n",
+    )
+    return fake_slurm
+
+
+def test_gpu_work_runs_in_its_own_job_and_tables_on_cpus(
+    capsys,
+    gpu_site,
+    fake_engine,  # noqa: F811
+):
+    assert main(["run", "doc"]) == 0
+    out = capsys.readouterr().out
+    assert "submitted job 42 to build resource fake_weights" in out
+    assert "submitted job 43 (2 GPU tasks) for the GPU work" in out
+    assert "submitted job 44 (1 task) to write" in out and "after it" in out
+    build, gpu, tables = gpu_site.scripts
+    assert "#SBATCH --partition=cpu" in build and "--gres" not in build
+    assert "#SBATCH --partition=gpu" in gpu and "#SBATCH --gres=gpu:1" in gpu
+    assert "#SBATCH --dependency=afterok:42" in gpu
+    assert "#SBATCH --partition=cpu" in tables and "--gres" not in tables
+    assert "#SBATCH --dependency=afterok:42,afterany:43" in tables
+
+    jobs = {job.job_id: job for job in slurm_jobs.jobs(fake_engine / "outputs")}
+    assert main(["worker", str(jobs["42"].directory), "0"]) == 0
+    # Task 0 takes its share, then the item nobody holds; task 1 finds nothing left.
+    assert main(["worker", str(jobs["43"].directory), "0"]) == 0
+    assert fake_modules.CALLS["fake_scores"] == 2
+    assert main(["worker", str(jobs["43"].directory), "1"]) == 0
+    assert fake_modules.CALLS["fake_scores"] == 2
+    capsys.readouterr()
+    assert main(["worker", str(jobs["44"].directory), "0"]) == 0
+    assert "wrote " in capsys.readouterr().out
+    assert fake_modules.CALLS["fake_scores"] == 2
+
+
+def test_a_gpu_task_leaves_held_items_and_the_table_job_reports_them(
+    capsys,
+    gpu_site,
+    fake_engine,  # noqa: F811
+):
+    from txtures.store import EntryStore
+
+    assert main(["run", "doc"]) == 0
+    jobs = {job.job_id: job for job in slurm_jobs.jobs(fake_engine / "outputs")}
+    assert main(["worker", str(jobs["42"].directory), "0"]) == 0
+    items = EntryStore(fake_engine / "cache")
+    from txtures import api
+    from txtures.engine import plan_request
+    from txtures.settings import resolve_settings
+
+    settings = resolve_settings({})
+    plan = plan_request(settings, api.load_definitions(settings), "doc", "main", None)
+    scores = next(p for p in plan.variants if p.name == "fake_scores")
+    held = scores.item_identity(plan.corpus.documents[1])
+    assert items.try_lock("fake_scores", held)
+    try:
+        started = time.monotonic()
+        assert main(["worker", str(jobs["43"].directory), "0"]) == 0
+        assert time.monotonic() - started < 5
+        assert fake_modules.CALLS["fake_scores"] == 1
+        capsys.readouterr()
+        assert main(["worker", str(jobs["44"].directory), "0"]) == 1
+        err = capsys.readouterr().err
+        assert "GPU results of fake_scores are missing" in err
+        assert fake_modules.CALLS["fake_scores"] == 1
+        assert not list((fake_engine / "outputs" / "doc").glob("main-*/doc.tsv"))
+    finally:
+        items.unlock("fake_scores", held)
+
+
+def test_several_inputs_share_one_gpu_job_and_one_table_job(
+    capsys,
+    gpu_site,
+    fake_engine,  # noqa: F811
+):
+    write(fake_engine / "inputs" / "other.txt", "Another one.\n")
+    write(fake_engine / "inputs" / "third.txt", "A third.\n")
+    assert main(["run", "doc", "other", "third", "--nworkers", "3"]) == 0
+    out = capsys.readouterr().out
+    assert "submitted job 43 (3 GPU tasks) for the GPU work" in out
+    assert "to write 3 tables (doc, other, third)" in out
+    jobs = {job.job_id: job for job in slurm_jobs.jobs(fake_engine / "outputs")}
+    assert jobs["43"].source == "gpu" and len(jobs["43"].request["requests"]) == 3
+    assert jobs["44"].source == "batch"
+    for job_id, tasks in (("42", 1), ("43", 3), ("44", 1)):
+        for task in range(tasks):
+            assert main(["worker", str(jobs[job_id].directory), str(task)]) == 0
+    assert fake_modules.CALLS["fake_scores"] == 4
+    # One GPU task did all three inputs with one load of the model.
+    assert fake_modules.CALLS["load"] == 1
+    for name in ("doc", "other", "third"):
+        assert list((fake_engine / "outputs" / name).glob("main-*/" + name + ".tsv"))
+    assert main(["run", "doc", "other", "third"]) == 0
+    assert capsys.readouterr().out.count("is already current") == 3

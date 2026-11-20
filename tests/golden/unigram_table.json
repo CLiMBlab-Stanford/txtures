@@ -1,0 +1,47 @@
+{
+ "inputs": {
+  "tools_definition_sha256": "0b9b796b53b865fba859d8eada84381d112a151355d93dda06261f86f5da6a5f"
+ },
+ "target": "unigram_table",
+ "values": {
+  "properties": {
+   "unknown_logprob": -3.4922614,
+   "vocabulary": 14
+  },
+  "scores": {
+   ".": [
+    -0.86031055,
+    false
+   ],
+   "</s>": [
+    -0.86031055,
+    false
+   ],
+   "barn": [
+    -1.346355,
+    false
+   ],
+   "cat": [
+    -1.3184509,
+    false
+   ],
+   "past": [
+    -1.4654946,
+    false
+   ],
+   "raced": [
+    -1.4654946,
+    false
+   ],
+   "the": [
+    -0.5592444,
+    false
+   ],
+   "zebra": [
+    -3.4922614,
+    true
+   ]
+  }
+ },
+ "version": 1
+}

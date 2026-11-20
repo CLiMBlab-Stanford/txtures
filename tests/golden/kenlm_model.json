@@ -1,0 +1,62 @@
+{
+ "inputs": {
+  "tools_definition_sha256": "0b9b796b53b865fba859d8eada84381d112a151355d93dda06261f86f5da6a5f"
+ },
+ "target": "kenlm_model",
+ "values": {
+  "properties": {
+   "ngrams": {
+    "1": 16,
+    "2": 43,
+    "3": 91
+   }
+  },
+  "scores": [
+   [
+    [
+     -0.000976584,
+     false
+    ],
+    [
+     -0.75434005,
+     false
+    ],
+    [
+     -0.87738407,
+     false
+    ],
+    [
+     -0.0052574766,
+     false
+    ],
+    [
+     -3.4601521,
+     true
+    ],
+    [
+     -0.90376383,
+     false
+    ]
+   ],
+   [
+    [
+     -0.000976584,
+     false
+    ],
+    [
+     -0.72263604,
+     false
+    ],
+    [
+     -0.8061899,
+     false
+    ],
+    [
+     -0.0049557956,
+     false
+    ]
+   ]
+  ]
+ },
+ "version": 1
+}

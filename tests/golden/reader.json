@@ -1,0 +1,173 @@
+{
+ "target": "reader",
+ "values": {
+  "delimited": {
+   "documents": [
+    {
+     "digest": "a9f1b294ed04bbd015394029268931c002eabdd9f6d02cb02586f0755c2bc874",
+     "id": "1",
+     "metadata": [],
+     "region_ids": [],
+     "regions": [
+      [
+       0,
+       3
+      ],
+      [
+       4,
+       7
+      ],
+      [
+       8,
+       13
+      ],
+      [
+       14,
+       18
+      ]
+     ],
+     "sentences": [
+      [
+       "1",
+       0,
+       2
+      ],
+      [
+       "2",
+       2,
+       4
+      ]
+     ],
+     "text": "One two three four"
+    }
+   ],
+   "layout": "plain-text"
+  },
+  "lines": {
+   "documents": [
+    {
+     "digest": "2e4c691f0e83b055e13cb8351a2a9887494faa6146584c1b5af9cb9849948c78",
+     "id": "1",
+     "metadata": [],
+     "region_ids": [],
+     "regions": [
+      [
+       0,
+       3
+      ],
+      [
+       4,
+       9
+      ],
+      [
+       10,
+       15
+      ],
+      [
+       16,
+       20
+      ],
+      [
+       21,
+       24
+      ],
+      [
+       25,
+       29
+      ],
+      [
+       30,
+       35
+      ]
+     ],
+     "sentences": [],
+     "text": "The horse raced past the barn fell."
+    },
+    {
+     "digest": "a5a659611e34a6694bf5d0ac6f4203159c2c433d28732d08a7e095b878a16f06",
+     "id": "2",
+     "metadata": [],
+     "region_ids": [],
+     "regions": [
+      [
+       0,
+       5
+      ],
+      [
+       6,
+       8
+      ],
+      [
+       10,
+       15
+      ]
+     ],
+     "sentences": [],
+     "text": "Cafe\u0301 au  lait."
+    }
+   ],
+   "layout": "plain-text"
+  },
+  "regions": {
+   "documents": [
+    {
+     "digest": "c264b23b1d07ecbd688cef6b9ee634459f330f1cacfbf876afb595c215eebd36",
+     "id": "d1",
+     "metadata": [
+      {
+       "condition": "a"
+      },
+      {
+       "condition": "a"
+      },
+      {
+       "condition": "b"
+      },
+      {
+       "condition": "b"
+      }
+     ],
+     "region_ids": [
+      "1",
+      "2",
+      "1",
+      "2"
+     ],
+     "regions": [
+      [
+       0,
+       3
+      ],
+      [
+       4,
+       10
+      ],
+      [
+       11,
+       13
+      ],
+      [
+       14,
+       19
+      ]
+     ],
+     "sentences": [
+      [
+       "1",
+       0,
+       2
+      ],
+      [
+       "2",
+       2,
+       4
+      ]
+     ],
+     "text": "The horse. It fell."
+    }
+   ],
+   "layout": "region-per-row"
+  }
+ },
+ "version": 2
+}

@@ -442,3 +442,25 @@ def test_install_needs_an_installation_and_its_checkout(capsys, monkeypatch, tmp
     monkeypatch.setattr(installation, "current", lambda: installed)
     assert main(["install"]) == 1
     assert "has moved or was removed" in capsys.readouterr().err
+
+
+def test_module_ls_lists_modules_and_config_keys(capsys):
+    assert main(["module", "ls", "--json"]) == 0
+    rows = {row["name"]: row for row in json.loads(capsys.readouterr().out)}
+    assert rows["surprisal"]["requires"] == ["lm_scores"]
+    assert rows["lm_scores"]["slurm"] and not rows["surprisal"]["slurm"]
+    assert rows["dependency_locality"]["features"] == ["dlt"]
+    assert main(["module", "surprisal", "ls", "--json"]) == 0
+    keys = {row["key"]: row for row in json.loads(capsys.readouterr().out)}
+    assert keys["units"] == {
+        "key": "units",
+        "type": "bits | nats",
+        "default": "bits",
+        "sweepable": True,
+        "description": "Logarithm base of the reported surprisal: 2 for bits, e for nats.",
+    }
+    assert main(["module", "ls", "word_length"]) == 0
+    assert "word_length has no config keys" in capsys.readouterr().out
+    assert main(["module", "nope", "ls"]) == 1
+    assert "no module named 'nope'" in capsys.readouterr().err
+    assert main(["module", "surprisal"]) == 1

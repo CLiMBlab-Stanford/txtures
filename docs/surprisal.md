@@ -46,7 +46,8 @@ earlier tokens when there are fewer.
 | `correction` | `word_boundary` | `word_boundary` or `none` |
 | `units` | `bits` | `bits` or `nats` |
 
-Both are sweepable. The output column is `surprisal`.
+Both are sweepable. The output column is `surprisal` followed by the model's
+label, such as `surprisal_gpt2` (see [Column names](definitions.md#column-names)).
 
 With `correction: none`, a region's surprisal is the sum of the surprisals of
 its tokens. That sum misses some of the probability of the word. Most

@@ -235,3 +235,21 @@ def test_heartbeat_keeps_held_locks_fresh(tmp_path):
     os.utime(path, (0, 0))
     heartbeat.beat()
     assert path.stat().st_mtime == 0
+
+
+def test_publishing_leaves_symbolic_links_and_their_targets_alone(tmp_path):
+    outside = tmp_path / "outside.txt"
+    outside.write_text("x")
+    outside.chmod(0o600)
+
+    def write(directory):
+        (directory / "dangling").symlink_to("/nonexistent/target")
+        (directory / "outside").symlink_to(outside)
+        (directory / "linked-dir").symlink_to(tmp_path)
+
+    from txtures.store import EntryStore
+
+    store = EntryStore(tmp_path / "store")
+    entry = store.publish("kind", "ab" * 32, write, {})
+    assert (entry / "dangling").is_symlink()
+    assert outside.stat().st_mode & 0o777 == 0o600

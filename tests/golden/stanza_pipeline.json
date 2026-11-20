@@ -1,0 +1,32 @@
+{
+ "inputs": {
+  "commit": "03960e981a2e7e86151a898a8e675d2026cecc73",
+  "language": "en",
+  "package": "default",
+  "processors": [
+   "tokenize",
+   "mwt",
+   "pos",
+   "lemma",
+   "depparse",
+   "ner"
+  ],
+  "resources_version": "1.15.0"
+ },
+ "target": "stanza_pipeline",
+ "values": {
+  "files": [
+   "en/backward_charlm/1billion.pt",
+   "en/depparse/combined_charlm.pt",
+   "en/forward_charlm/1billion.pt",
+   "en/lemma/combined_nocharlm.pt",
+   "en/mwt/combined.pt",
+   "en/ner/ontonotes-ww-multi_charlm.pt",
+   "en/pos/combined_charlm.pt",
+   "en/pretrain/conll17.pt",
+   "en/tokenize/combined_nocharlm.pt"
+  ],
+  "kind": "stanza_pipeline"
+ },
+ "version": 1
+}

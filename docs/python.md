@@ -81,15 +81,16 @@ numbers, with `NA` read as NaN and `Inf` as infinity, or Booleans.
 ## Slurm
 
 With the default `execution.executor`, `auto`, `tx.compute` and `tx.run`
-compute what is missing with a Slurm job when intensive work, such as
-`lm_scores`, is missing and Slurm is set up on this machine, and block until
+compute what is missing with a Slurm job when Slurm work, such as
+`lm_scores` results, is missing and Slurm is set up on this machine, and block until
 the job ends. Otherwise they compute here. `slurm` submits every request
 that has anything missing (see [Slurm](slurm.md#choosing-local-or-slurm)). They then
 return the same table a local call would. If nothing is missing, nothing is
-submitted.
+submitted. `slurm={"ngpus": 0, "memory_gb": 64}` sets the size of the jobs a
+call submits (see [Job sizes](slurm.md#job-sizes)).
 
 ```python
-table = tx.compute("surprisal", texts, config=config, workers=4)
+table = tx.compute("surprisal", texts, config=config, nworkers=4)
 ```
 
 ```text
@@ -99,7 +100,8 @@ job 81234: 4 RUNNING
 job 81234: 4 COMPLETED
 ```
 
-- `workers` sets the number of array tasks (default `slurm.workers`), and
+- `nworkers` sets the number of array tasks (default `slurm.workers`;
+  `workers` is an older name for it), and
   `local=True` computes in the calling process instead.
 - `tx.compute` writes its text and configs to the job directory, so the
   tasks can read them. They must therefore be JSON values: strings,
@@ -121,7 +123,7 @@ to reach.
 
 `tx.compute` and `tx.run` accept keyword arguments that override settings for
 one call: `home`, `definitions`, `cache`, `resources`, and `device`, and
-for `tx.run` also `inputs` and `outputs`. `local` and `workers` choose how
+for `tx.run` also `inputs` and `outputs`. `local` and `nworkers` choose how
 the call computes (see [Slurm](#slurm)). `progress`, if given, is called with
 each progress message, so `progress=print` shows what a long call is doing.
 

@@ -28,12 +28,13 @@ from txtures.store import EntryStore
 
 @dataclass(frozen=True)
 class PlannedResource:
-    """A resource with its resolved spec and identity."""
+    """A resource with its resolved spec, identity, and planned dependencies."""
 
     name: str
     resource: Resource
     resolved: Mapping[str, Any]
     identity: str
+    dependencies: Mapping[str, PlannedResource] = field(default_factory=dict)
 
     @property
     def kind(self) -> str:
@@ -93,11 +94,18 @@ class Plan:
         return [(column, self.planned(column.variant)) for column in self.columns]
 
     def resources(self) -> list[PlannedResource]:
-        """Return each distinct resource the plan needs, in first-use order."""
+        """Return each distinct resource the plan needs, dependencies before the
+        resources that need them, otherwise in first-use order."""
         found: dict[str, PlannedResource] = {}
+
+        def visit(resource: PlannedResource) -> None:
+            for dependency in resource.dependencies.values():
+                visit(dependency)
+            found.setdefault(resource.identity, resource)
+
         for planned in self.variants:
             for resource in planned.resources.values():
-                found.setdefault(resource.identity, resource)
+                visit(resource)
         return list(found.values())
 
 
@@ -106,8 +114,92 @@ def item_kind(module_name: str) -> str:
     return module_name
 
 
-def resource_identity(resource: Resource, resolved: Mapping[str, Any]) -> str:
-    return digest({"kind": resource.kind, "version": resource.version, "spec": dict(resolved)})
+def resource_identity(
+    resource: Resource,
+    resolved: Mapping[str, Any],
+    dependencies: Mapping[str, str] | None = None,
+) -> str:
+    """Identity of a resource: its kind, version, resolved spec, and the
+    identities of its dependencies, by name. A resource without dependencies
+    has the identity it had before dependencies existed."""
+    content: dict[str, Any] = {
+        "kind": resource.kind,
+        "version": resource.version,
+        "spec": dict(resolved),
+    }
+    if dependencies:
+        content["dependencies"] = dict(dependencies)
+    return digest(content)
+
+
+def plan_resource(
+    name: str,
+    resource: Resource,
+    context,
+    cache: dict[str, PlannedResource] | None = None,
+) -> PlannedResource:
+    """Resolve a resource and, first, every resource it depends on.
+
+    `cache` maps a resource's kind and spec to its planned form, so a
+    resource that several modules or resources need is resolved once.
+
+    Raises:
+        TxturesError: The resource or a dependency cannot be resolved.
+    """
+    cache = {} if cache is None else cache
+    key = digest({"kind": resource.kind, "spec": resource.spec})
+    if key not in cache:
+        dependencies = {
+            dependency_name: plan_resource(dependency_name, dependency, context, cache)
+            for dependency_name, dependency in resource.dependencies().items()
+        }
+        resolved = resource.resolve(context)
+        identities = {n: d.identity for n, d in dependencies.items()}
+        cache[key] = PlannedResource(
+            name,
+            resource,
+            resolved,
+            resource_identity(resource, resolved, identities),
+            dependencies,
+        )
+    return cache[key]
+
+
+def resource_record(resource: PlannedResource) -> dict[str, Any]:
+    """A JSON description of a planned resource from which `from_record` rebuilds it."""
+    return {
+        "kind": resource.kind,
+        "spec": dict(resource.resource.spec),
+        "resolved": dict(resource.resolved),
+        "identity": resource.identity,
+        "dependencies": {
+            name: resource_record(dependency) for name, dependency in resource.dependencies.items()
+        },
+    }
+
+
+def from_record(record: Mapping[str, Any], name: str = "build") -> PlannedResource:
+    """Rebuild a planned resource from `resource_record` without resolving it again.
+
+    Raises:
+        TxturesError: This txtures has no resource of the recorded kind, or
+            one would have a different identity now.
+    """
+    from txtures.modules import resource_class
+
+    try:
+        resource = resource_class(record["kind"])(record["spec"])
+    except KeyError:
+        raise TxturesError(f"this txtures has no resource kind {record['kind']!r}") from None
+    dependencies = {n: from_record(r, n) for n, r in record.get("dependencies", {}).items()}
+    identities = {n: d.identity for n, d in dependencies.items()}
+    identity = resource_identity(resource, record["resolved"], identities)
+    if identity != record["identity"]:
+        raise TxturesError(
+            f"resource {record['kind']} builds differently in this txtures than when the "
+            "job was submitted; run the request again"
+        )
+    return PlannedResource(name, resource, record["resolved"], identity, dependencies)
 
 
 def table_identity(corpus: Corpus, columns: Sequence[tuple[str, str]]) -> str:
@@ -160,17 +252,10 @@ def plan_request(
                 notes.append(f"{where}: {message}")
             resources: dict[str, PlannedResource] = {}
             for name, resource in module.resources(variant.config).items():
-                key = digest({"kind": resource.kind, "spec": resource.spec})
-                if key not in resolved_resources:
-                    try:
-                        resolved = resource.resolve(context)
-                    except TxturesError as error:
-                        problems.append(Problem(where, str(error)))
-                        continue
-                    resolved_resources[key] = PlannedResource(
-                        name, resource, resolved, resource_identity(resource, resolved)
-                    )
-                resources[name] = resolved_resources[key]
+                try:
+                    resources[name] = plan_resource(name, resource, context, resolved_resources)
+                except TxturesError as error:
+                    problems.append(Problem(where, str(error)))
             upstream = {name: planned[value.digest] for name, value in variant.upstream.items()}
             identity = digest(
                 {

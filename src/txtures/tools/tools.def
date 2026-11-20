@@ -1,0 +1,46 @@
+Bootstrap: docker
+From: debian:bookworm-slim@sha256:734a72b3d6142a71993b4bc580ca01d8ca687f77a2c422d96a961d3376b179bc
+
+# The txtures tools image: every non-Python program txtures runs.
+#
+# txtures builds this definition as an Apptainer sandbox, identified by the
+# SHA-256 of this file, so any edit produces a new image and new identities
+# for everything built with it. Pin each tool to a release or commit, and
+# record it in /opt/txtures/tools.json, which txtures copies next to the
+# image.
+
+%post
+    set -eu
+    # apt drops privileges to _apt, which an unprivileged build cannot do.
+    echo 'APT::Sandbox::User "root";' > /etc/apt/apt.conf.d/99sandbox
+    apt-get update
+    apt-get install -y --no-install-recommends \
+        ca-certificates git cmake make g++ \
+        libboost-program-options-dev libboost-system-dev libboost-thread-dev \
+        libboost-test-dev zlib1g-dev libbz2-dev liblzma-dev
+
+    # KenLM: lmplz estimates n-gram models, build_binary converts them, and
+    # query scores text.
+    KENLM_COMMIT=4cb443e60b7bf2c0ddf3c745378f76cb59e254e5
+    git clone --quiet https://github.com/kpu/kenlm.git /opt/src/kenlm
+    git -C /opt/src/kenlm checkout --quiet "$KENLM_COMMIT"
+    cmake -S /opt/src/kenlm -B /opt/src/kenlm/build -DCMAKE_BUILD_TYPE=Release
+    make -C /opt/src/kenlm/build -j"$(nproc)" lmplz build_binary query
+    mkdir -p /opt/txtures/bin
+    cp /opt/src/kenlm/build/bin/lmplz /opt/src/kenlm/build/bin/build_binary \
+        /opt/src/kenlm/build/bin/query /opt/txtures/bin/
+    rm -rf /opt/src/kenlm/build
+
+    # Record the tools and every installed package.
+    {
+        printf '{\n  "kenlm": {"commit": "%s"},\n  "packages": {\n' "$KENLM_COMMIT"
+        dpkg-query -W -f '    "${Package}": "${Version}",\n' | sed '$ s/,$//'
+        printf '  }\n}\n'
+    } > /opt/txtures/tools.json
+
+    apt-get clean
+    rm -rf /var/lib/apt/lists/*
+
+%environment
+    export PATH=/opt/txtures/bin:$PATH
+    export LC_ALL=C.UTF-8

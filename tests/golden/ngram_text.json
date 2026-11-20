@@ -1,0 +1,137 @@
+{
+ "target": "ngram_text",
+ "values": {
+  "Cafe\u0301 au lait\nA second line": {
+   "cased": [
+    "Caf\u00e9",
+    "au",
+    "lait",
+    "A",
+    "second",
+    "line"
+   ],
+   "sentences": [
+    "Cafe\u0301 au lait",
+    "A second line"
+   ],
+   "tokens": [
+    "caf\u00e9",
+    "au",
+    "lait",
+    "a",
+    "second",
+    "line"
+   ]
+  },
+  "Don\u2019t stop, Mr. Smith! It cost $3,500.75 in 2020 -- really?": {
+   "cased": [
+    "Do",
+    "n't",
+    "stop",
+    ",",
+    "Mr",
+    ".",
+    "Smith",
+    "!",
+    "It",
+    "cost",
+    "$",
+    "3,500.75",
+    "in",
+    "2020",
+    "-",
+    "-",
+    "really",
+    "?"
+   ],
+   "sentences": [
+    "Don\u2019t stop, Mr. Smith!",
+    "It cost $3,500.75 in 2020 -- really?"
+   ],
+   "tokens": [
+    "do",
+    "n't",
+    "stop",
+    ",",
+    "mr",
+    ".",
+    "smith",
+    "!",
+    "it",
+    "cost",
+    "$",
+    "3,500.75",
+    "in",
+    "2020",
+    "-",
+    "-",
+    "really",
+    "?"
+   ]
+  },
+  "They're well-known; I'd've gone. \"Wow.\" Then J. Doe left at 5 p.m. today.": {
+   "cased": [
+    "They",
+    "'re",
+    "well-known",
+    ";",
+    "I",
+    "'d",
+    "'ve",
+    "gone",
+    ".",
+    "\"",
+    "Wow",
+    ".",
+    "\"",
+    "Then",
+    "J",
+    ".",
+    "Doe",
+    "left",
+    "at",
+    "5",
+    "p",
+    ".",
+    "m",
+    ".",
+    "today",
+    "."
+   ],
+   "sentences": [
+    "They're well-known; I'd've gone.",
+    "\"Wow.\"",
+    "Then J. Doe left at 5 p.m. today."
+   ],
+   "tokens": [
+    "they",
+    "'re",
+    "well-known",
+    ";",
+    "i",
+    "'d",
+    "'ve",
+    "gone",
+    ".",
+    "\"",
+    "wow",
+    ".",
+    "\"",
+    "then",
+    "j",
+    ".",
+    "doe",
+    "left",
+    "at",
+    "5",
+    "p",
+    ".",
+    "m",
+    ".",
+    "today",
+    "."
+   ]
+  }
+ },
+ "version": 1
+}

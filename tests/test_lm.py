@@ -20,6 +20,8 @@ from txtures.modules.lm_scores import LMScores, LMScoresConfig, score_sequences,
 from txtures.modules.surprisal import Surprisal, SurprisalConfig, region_surprisal
 from txtures.settings import resolve_settings
 
+pytestmark = pytest.mark.heavy
+
 LN2 = math.log(2)
 
 
@@ -450,18 +452,25 @@ def run(settings, workflow):
     from txtures.store import EntryStore
 
     definitions = Definitions.load(settings.definitions, REGISTRY)
-    plan = plan_request(settings, definitions, "doc", workflow)
+    plan = plan_request(settings, definitions, "doc", workflow, ["surprisal"])
     executor = Executor(
         plan, EntryStore(settings.cache), EntryStore(settings.resource_store), RunContext("cpu")
     )
-    return plan, executor, run_request(plan, executor, None)
+    return plan, executor, run_request(plan, executor, ["surprisal"])
 
 
 def test_surprisal_table_from_a_local_model(env, lms):
     plan, executor, (directory, written) = run(env, "toy")
     assert written
     rows = [line.split("\t") for line in (directory / "doc.tsv").read_text().splitlines()]
-    assert rows[0] == ["document_id", "region_index", "text", "char_start", "char_end", "surprisal"]
+    assert rows[0] == [
+        "document_id",
+        "region_index",
+        "text",
+        "char_start",
+        "char_end",
+        "surprisal_eos",
+    ]
     assert [row[2] for row in rows[1:]] == ["ab", "ba", "b", "a"]
     expected = [
         *surprisal(lms("eos"), document(["ab", "ba", "b"])),
@@ -477,7 +486,7 @@ def test_surprisal_table_from_a_local_model(env, lms):
 def test_swept_units_reuse_one_lm_scores_variant(env):
     plan, executor, (directory, _) = run(env, "units")
     header = (directory / "doc.tsv").read_text().splitlines()[0].split("\t")
-    assert header[-2:] == ["surprisal_bits", "surprisal_nats"]
+    assert header[-2:] == ["surprisal_eos_bits", "surprisal_eos_nats"]
     assert sum(1 for p in plan.variants if p.name == "lm_scores") == 1
 
 

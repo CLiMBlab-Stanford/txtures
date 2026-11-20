@@ -52,7 +52,18 @@ def run_context(settings: Settings) -> RunContext:
     Without a saved token, the Hugging Face libraries look for one as they
     usually do, so a host process's own login still works through the API.
     """
-    return RunContext(settings.device, settings.hf_cache, saved_token())
+    return RunContext(
+        settings.device,
+        settings.hf_cache,
+        saved_token(),
+        resources=settings.resources,
+        runtime=settings["execution.runtime"],
+        corpora={
+            key.split(".", 1)[1]: settings[key]
+            for key in ("corpora.ptb3",)
+            if settings[key] is not None
+        },
+    )
 
 
 def apply(

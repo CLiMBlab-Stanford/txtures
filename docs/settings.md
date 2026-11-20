@@ -66,8 +66,10 @@ the Python API issues a `DefaultLocationsWarning`, once per process.
 | Key | Default | Meaning |
 | --- | --- | --- |
 | `execution.device` | `auto` | `auto` (CUDA, then Apple MPS, then CPU), or a PyTorch device such as `cpu` or `cuda:1` |
-| `execution.executor` | `auto` | `auto` uses Slurm for intensive work where it is set up; `slurm` or `local` always (see [Slurm](slurm.md#choosing-local-or-slurm)) |
+| `execution.executor` | `auto` | `auto` uses Slurm for Slurm workloads where it is set up; `slurm` or `local` always (see [Slurm](slurm.md#choosing-local-or-slurm)) |
 | `execution.max_variants` | 64 | the most variants one module may expand to |
+| `execution.runtime` | unset | an Apptainer executable for the tools image; unset uses txtures' pinned Apptainer (see [Tools](tools.md)) |
+| `corpora.ptb3` | unset | a licensed copy of the Penn Treebank 3 (LDC99T42), which txtures cannot provide (see [GCG treebank](gcg.md)) |
 
 The `slurm` settings are listed in [Slurm](slurm.md#settings).
 

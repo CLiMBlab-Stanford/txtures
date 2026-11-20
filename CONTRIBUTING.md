@@ -112,6 +112,37 @@ error messages. txtures cannot detect whether an arbitrary code edit is
 scientifically neutral, so this decision belongs to the contributor and the
 reviewer. State it in the pull request.
 
+The same rule applies to a resource's `version` and to `READER_VERSION` in
+`txtures/inputs.py`. Golden outputs catch changes that miss it:
+`tests/golden/` records, for every versioned module, resource, and the input
+reader, the values computed from fixed inputs and the version they were
+computed under, and `tests/test_golden.py` fails when the values change but
+the version does not. After incrementing the version, record the new values:
+
+```bash
+txtures-install/env/bin/python tests/golden.py --update TARGET
+```
+
+The script refuses to record changed values under an unchanged version.
+Golden outputs need no downloads; the toy language model's weights come
+from a formula, so they do not depend on PyTorch's random number generator.
+A new versioned module or resource needs a target in `tests/golden.py`. The `parse` and `stanza_pipeline`
+targets use Stanza's English models, built into the configured resource
+store (`resources/store` in the txtures home) the first time and reused
+after; a Stanza release that resolves to other models asks for the golden
+values to be regenerated rather than for a version bump.
+
+## Running the tests
+
+`pytest` runs the whole suite except tests marked `integration`, which
+need Slurm, network downloads of treebanks, or similar; the release checks
+run those too (`pytest -m "integration or not integration"`). During
+development, `pytest --fast` skips the tests marked `heavy`, which load
+neural models (the toy language model and Stanza), and runs in about a
+third of the time. On a network file system, `python tests/local.py` runs
+either from a local copy of the code and environment, passing its options
+to pytest.
+
 ## Releases and compatibility
 
 `main` contains released code. Prepare changes on `dev` or a feature branch,
