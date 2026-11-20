@@ -12,9 +12,11 @@ also the site::
     HOME/cache/         stored per-document results
     HOME/resources/     models and the Hugging Face cache
 
-The home comes from a flag, `TXTURES_HOME`, or the home-path file, a plain
-text file holding only its path, which `txtures site use PATH` writes;
-otherwise it is `~/txtures-home`. Each directory comes from a flag or its
+The home comes from a flag, `TXTURES_HOME`, the installation's home (set by
+`./install --home DIR`, for a checkout that needs its own home, such as one
+developing unreleased code), or the home-path file, a plain text file holding
+only its path, which `txtures site use PATH` writes; otherwise it is
+`~/txtures-home`. Each directory comes from a flag or its
 environment variable, such as `TXTURES_CACHE`, and otherwise from the
 layout above, so the site cannot move it. Every other setting comes from a
 flag, its environment variable, the home's `site.yml`, or a built-in
@@ -439,8 +441,13 @@ def resolve_settings(
     user_home: Path | None = None,
     cwd: Path | None = None,
     tolerate_stale: bool = False,
+    installation_home: tuple[Path, str] | None = None,
 ) -> Settings:
     """Resolve every setting from flags, the environment, the home, and defaults.
+
+    `installation_home` is the running installation's home and where it is
+    recorded (`installation.home_of_current`); it comes after flags and
+    `TXTURES_HOME` and before the home-path file.
 
     `flags` maps dotted keys to values given on the command line; `None` values
     are ignored. Relative paths from flags and environment variables resolve
@@ -484,6 +491,8 @@ def resolve_settings(
 
     pointer = home_path_file(env, user_home)
     home = given(SPEC_BY_KEY["home"])
+    if home is None and installation_home is not None:
+        home = Setting("home", installation_home[0], installation_home[1])
     if home is None:
         chosen = _read_home_path(pointer)
         if chosen is not None:

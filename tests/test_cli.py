@@ -464,3 +464,16 @@ def test_module_ls_lists_modules_and_config_keys(capsys):
     assert main(["module", "nope", "ls"]) == 1
     assert "no module named 'nope'" in capsys.readouterr().err
     assert main(["module", "surprisal"]) == 1
+
+
+def test_gc_leaves_a_shared_store_alone(capsys, fake_engine, tmp_path):
+    shared = tmp_path / "shared-resources"
+    stale = shared / "store" / "ngram_corpus" / "ab" / ("ab" + "0" * 62)
+    stale.mkdir(parents=True)
+    (stale / "manifest.json").write_text(
+        json.dumps({"digest": "ab" + "0" * 62, "kind": "ngram_corpus", "version": 0, "spec": {}})
+    )
+    (fake_engine / "resources").symlink_to(shared)
+    assert main(["gc"]) == 0
+    assert "skipped the resources store" in capsys.readouterr().out
+    assert stale.exists()

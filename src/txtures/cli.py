@@ -329,6 +329,15 @@ def build_parser() -> argparse.ArgumentParser:
         dest="make_default",
         help="make the txtures command run this installation",
     )
+    homes = install.add_mutually_exclusive_group()
+    homes.add_argument(
+        "--home",
+        type=Path,
+        help="give this installation its own txtures home, used before your site",
+    )
+    homes.add_argument(
+        "--no-home", action="store_true", help="use your site again instead of an own home"
+    )
     install.set_defaults(handler=install_command)
 
     hf = commands.add_parser("hf", help="manage your Hugging Face token for gated models")
@@ -585,7 +594,10 @@ def env_ls(args: argparse.Namespace) -> int:
 def _report_env(args: argparse.Namespace, path: Path, keys: Sequence[str], env) -> None:
     """Print where each of `keys` will come from in a shell that sources `path`."""
     settings = resolve_settings(
-        {key: getattr(args, key) for key in PATH_FLAGS}, env=env, tolerate_stale=True
+        {key: getattr(args, key) for key in PATH_FLAGS},
+        env=env,
+        tolerate_stale=True,
+        installation_home=installation.home_of_current(),
     )
     for key in dict.fromkeys(keys):
         setting = settings.values[key]
@@ -1005,7 +1017,7 @@ def worker_command(args: argparse.Namespace) -> int:
     request = job.request
     flags = {key: value for key, value in request["settings"].items()}
     flags["execution.executor"] = "local"
-    settings = resolve_settings(flags)
+    settings = resolve_settings(flags, installation_home=installation.home_of_current())
     environment.apply(settings)
     if job.source == "resource":
         return _build_task(job, settings)
@@ -1491,6 +1503,8 @@ def install_command(args: argparse.Namespace) -> int:
             compute=args.compute,
             dev=args.dev,
             make_default=args.make_default,
+            home=args.home.expanduser().absolute() if args.home else None,
+            no_home=args.no_home,
         ),
     ]
     print(f"running {shlex.join(command)}", flush=True)
@@ -1521,6 +1535,17 @@ def gc_command(args: argparse.Namespace) -> int:
             print(f"removed the record and logs of finished job {job.job_id}")
     settings = _settings(args)
     items, resources = _stores(settings)
+    # A store reached through a symbolic link is shared with another home, whose
+    # (possibly older) txtures may still use entries this one finds stale.
+    for name, directory, store in (
+        ("cache", settings.cache, items),
+        ("resources", settings.resources, resources),
+    ):
+        if directory.is_symlink():
+            print(
+                f"skipped the {name} store: {directory} links to {directory.resolve()}, shared with another home"
+            )
+            store.root = directory / ".gc-skipped-shared-store"
     garbage = collection.find(items, resources, api.load_definitions(settings).registry)
     freed = 0
     for found in garbage:

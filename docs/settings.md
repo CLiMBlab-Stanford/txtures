@@ -49,6 +49,17 @@ Every use of txtures reads it: the command line, the Python API, and every
 installation or program that depends on txtures, so one `site use`
 configures all of them.
 
+An installation can instead have its own home, which comes before the
+home-path file for that installation only: `./install --home DIR`, or
+`txtures install --home DIR` for an existing one (`--no-home` returns it to
+your site). Use one for a checkout of unreleased code. Unreleased code may
+write settings, definitions, and outputs that the released txtures cannot
+read, so it should not share a home with released installations. Its home
+can share the resources of a lab home through a symbolic link: released code
+ignores resources it does not know. `txtures gc` leaves a store alone when
+it is a symbolic link, because the other home's txtures may still use entries
+this one finds stale.
+
 The layout is fixed, so a home's settings never move its directories. To
 keep a directory elsewhere, such as `resources` on a larger filesystem,
 make it a symbolic link. Settings never enter a result's identity, so
@@ -115,7 +126,8 @@ Each setting takes the first value found in these sources:
 1. a command-line flag, given before the command: `--home`,
    `--definitions`, `--inputs`, `--outputs`, `--cache`, or `--resources`;
 2. its environment variable;
-3. for `home`, the home-path file; for a location, the home's
+3. for `home`, the installation's own home, if it has one, then the
+   home-path file; for a location, the home's
    subdirectory of the same name; for any other setting, `site.yml`;
 4. the built-in default: `~/txtures-home` for `home`.
 
@@ -163,13 +175,15 @@ steps can be carried out.
 locked dependencies from `uv.lock`. The installation holds software only.
 Its record, `install.json`, notes the checkout, the environment, the PyTorch
 build, whether the development tools are installed, where the `txtures`
-command was put, and the versions installed. It holds no settings.
+command was put, the installation's own home if it has one, and the
+versions installed. It holds no other settings.
 
 | Option | Meaning |
 | --- | --- |
 | `--prefix DIR` | install into `DIR` instead of the checkout |
 | `--compute cuda\|cpu` | the PyTorch build; default `cuda` on Linux and `cpu` on macOS |
 | `--site DIR` | use the txtures home `DIR`, as `txtures site use DIR` does |
+| `--home DIR` | give this installation its own txtures home `DIR`, used before your site |
 | `--bin-dir DIR` | where to put the `txtures` command; default `~/.local/bin` |
 | `--no-launcher` | do not create the `txtures` command |
 | `--default` | make the `txtures` command run this installation, replacing one for another installation |

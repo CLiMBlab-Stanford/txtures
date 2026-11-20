@@ -230,3 +230,15 @@ def test_site_settings_inside_the_definitions_store_are_refused(home, tmp_path):
     assert "2. txtures site set slurm.partition=p" in message
     assert f"3. remove {lab / 'definitions' / 'site'}" in message
     assert resolve(home, tolerate_stale=True)["slurm.partition"] is None
+
+
+def test_an_installation_home_comes_before_the_home_path_file(home, tmp_path):
+    pointer(home, tmp_path / "site")
+    own = (tmp_path / "dev-home", "installation (/x/install.json)")
+    settings = resolve(home, installation_home=own)
+    assert settings.home == tmp_path / "dev-home"
+    assert settings.values["home"].source == "installation (/x/install.json)"
+    assert settings.cache == tmp_path / "dev-home" / "cache"
+    # TXTURES_HOME and flags still come first
+    assert resolve(home, env={"TXTURES_HOME": "/env"}, installation_home=own).home == Path("/env")
+    assert resolve(home, installation_home=None).home == tmp_path / "site"

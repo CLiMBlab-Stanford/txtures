@@ -84,7 +84,9 @@ def settings(flags: Mapping[str, Any] | None = None, *, tolerate_stale: bool = F
     installed = installation.current()
     if installed is not None and installed.settings and not tolerate_stale:
         raise SettingsError(installation.stale_message(installed))
-    resolved = resolve_settings(flags, tolerate_stale=tolerate_stale)
+    resolved = resolve_settings(
+        flags, tolerate_stale=tolerate_stale, installation_home=installation.home_of_current()
+    )
     if not _warned_defaults and uses_default_locations(resolved):
         _warned_defaults = True
         warnings.warn(DEFAULT_LOCATIONS_MESSAGE, DefaultLocationsWarning, stacklevel=3)
