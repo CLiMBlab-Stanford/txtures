@@ -143,6 +143,28 @@ third of the time. On a network file system, `python tests/local.py` runs
 either from a local copy of the code and environment, passing its options
 to pytest.
 
+## Validating against reference implementations
+
+Some modules reimplement older software and are checked against it on full
+treebanks: the gcg15 reannotation (`txtures.gcg`) against ModelBlocks' Perl,
+the latent-variable PCFG trainer (`txtures.lvpcfg`) against the Berkeley
+parser's `GrammarTrainer`, and the left-corner compilation and synproc parser
+against ModelBlocks' C++. These checks are too large for the test suite and
+need the licensed Penn Treebank, so they live in `txtures.validation`:
+
+```bash
+export TXTURES_VALIDATION_WORK=/path/to/work TXTURES_MODELBLOCKS=/path/to/modelblocks-release
+python -m txtures.validation --help                  # the commands, in pipeline order
+python -m txtures.validation gcg15-reference 23
+python -m txtures.validation gcg15-compare 23
+```
+
+The work directory receives treebank-derived files; keep it private. Run
+the long commands as Slurm jobs, for example
+`sbatch --wrap "python -m txtures.validation berkeley-train 2"`. Rerun the
+relevant check after changing these modules, and record new results with
+the evidence for the change.
+
 ## Releases and compatibility
 
 `main` contains released code. Prepare changes on `dev` or a feature branch,

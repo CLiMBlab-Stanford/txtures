@@ -54,7 +54,7 @@ txtures = "txtures.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-txtures = ["tools/tools.def"]
+txtures = ["tools/tools.def", "validation/data/**/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -68,7 +68,7 @@ markers = [
 [tool.ruff]
 line-length = 100
 target-version = "py312"
-extend-exclude = ["notebooks"]
+extend-exclude = ["notebooks", "src/txtures/validation/data"]
 
 [tool.ruff.lint]
 select = ["E4", "E7", "E9", "F", "I", "B", "UP"]
