@@ -124,6 +124,12 @@ def main(argv: list[str] | None = None) -> int:
         ("--merge", {"choices": ["once", "synproc"], "default": "synproc"}),
     )
     command(
+        "score",
+        "bracket F1 (ModelBlocks' evalb) and bits per word of a parse against gold trees",
+        ("sentences", {"help": "a .linetoks name with a .gold file"}),
+        ("parse", {"help": "a synproc .tokdecs or txtures .json file in the work directory"}),
+    )
+    command(
         "compare-parse",
         "per-word surprisal against ModelBlocks'",
         grammar_dump,
@@ -154,6 +160,10 @@ def main(argv: list[str] | None = None) -> int:
                     where, args.mode, args.grammar
                 ),
             }[name]()
+        elif name == "score":
+            from txtures.validation import scoring
+
+            scoring.score(where, args.sentences, args.parse)
         elif name in (
             "sentences",
             "gold-sentences",

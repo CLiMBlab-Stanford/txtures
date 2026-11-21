@@ -34,6 +34,7 @@ def build(paths: Paths) -> None:
         f"-I{DATA / 'stub'} -I{patched} -I{mb}/resource-incrsem/include -I{mb}/resource-logreg/include "
         f"-I{mb}/resource-incrsem/src -I{mb}/resource-rvtl"
     )
+    run(f"gcc -O2 -w -o {out / 'evalb'} {mb}/resource-linetrees/src/evalb.c")
     for program, source in PROGRAMS.items():
         run(f"{fix} {mb}/{source} > {patched}/{program}.cpp")
         run(

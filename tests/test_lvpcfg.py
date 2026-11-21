@@ -697,3 +697,37 @@ def test_continuous_batching_keeps_results_and_order(max_sentences, window):
         for a, b in zip(result["surprisal"], expected.surprisal, strict=True):
             assert (math.isnan(a) and math.isnan(b)) or abs(a - b) < 1e-9
         assert result["states"] == expected.states
+
+
+# Trees from parses, for scoring
+
+
+def test_trees_from_the_best_sequence_cover_the_sentence():
+    from txtures.lvpcfg import leftcorner as lc
+    from txtures.lvpcfg.evaluation import for_scoring, tree_from_states
+    from txtures.lvpcfg.synproc import Tables, reference_parse
+
+    tables = Tables(lc.compile_model(_binary_toy_pcfg().without_unaries()))
+    words = "the dogs see big cats .".split()
+    parse = reference_parse(tables, words, beam=50)
+    tree = tree_from_states(words, parse.states, tables.symbols)
+    assert list(tree.leaves()) == words
+    # as tokdecs2linetrees.py, a word attached at a base sits under the base's own node
+    assert str(tree) == (
+        "(S (S (NP (d the) (n (n dogs))) (VP (v see) (NP (a big) (n (n cats))))) (x (x .)))"
+    )
+    assert str(for_scoring(tree)) == (
+        "(S (S (NP (d the) (n dogs)) (VP (v see) (NP (a big) (n cats)))) (x .))"
+    )
+
+
+def test_trees_are_normalized_alike_for_scoring():
+    from txtures.lvpcfg.evaluation import for_scoring, gold_for_scoring, unlabeled
+    from txtures.lvpcfg.trees import parse
+
+    gold = "(S-lS (N-lA (N-aD (N-aD-PRTRM dogs))) (V-aN (V-aN-PRTRM bark)))"
+    assert str(gold_for_scoring(gold)) == "(S (N dogs) (V-aN bark))"
+    assert str(for_scoring(parse("((S (N-aD-PRTRM dogs) (V-aN bark)))").children[0])) == (
+        "(S (N-aD dogs) (V-aN bark))"
+    )
+    assert str(unlabeled(gold_for_scoring(gold))) == "(X (X dogs) (X bark))"

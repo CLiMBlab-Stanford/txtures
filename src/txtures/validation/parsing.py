@@ -99,11 +99,12 @@ def parse(
             "words": words_,
             "surprisal": result["surprisal"],
             "preterminals": [model.symbols[s[0]] if s else None for s in result["states"]],
+            "states": result["states"],
         }
         for words_, result in zip(sentences, found, strict=True)
     ]
     out = paths.mb / f"{name}.{grammar}.txtures-{merge}.json"
-    out.write_text(json.dumps(results), encoding="utf-8")
+    out.write_text(json.dumps({"symbols": model.symbols, "sentences": results}), encoding="utf-8")
     print(f"wrote {out}")
 
 
@@ -126,7 +127,7 @@ def compare(paths: Paths, grammar: str, name: str, merge: str = "once") -> None:
     """Per-word surprisal and preterminals of txtures and ModelBlocks on the same sentences."""
     mine = json.loads(
         (paths.mb / f"{name}.{grammar}.txtures-{merge}.json").read_text(encoding="utf-8")
-    )
+    )["sentences"]
     theirs = read_tokdecs(
         paths.mb / f"{name}.{grammar.split('.')[0]}.tokdecs", [len(s["words"]) for s in mine]
     )
