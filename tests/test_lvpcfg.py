@@ -640,3 +640,60 @@ def test_batched_parser_matches_the_reference(beam):
             for a, b in zip(result["surprisal"], expected.surprisal, strict=True):
                 assert (math.isnan(a) and math.isnan(b)) or abs(a - b) < 1e-9, (words, a, b)
             assert result["states"] == expected.states
+
+
+def test_lexicon_merge_once_and_as_synproc_does():
+    from txtures.lvpcfg.synproc import MergedLexicon, berkeley_signature
+
+    assert berkeley_signature("market") == "UNK-LC"
+    assert berkeley_signature("UNK-LC") == "UNK-CAPS-DASH"
+    assert berkeley_signature("UNK-CAPS-DASH") == "UNK-CAPS-DASH"  # its own signature
+    lexicon = {
+        "a": {"market": 0.5, "UNK-LC": 0.1},
+        "b": {"UNK-CAPS-DASH": 0.2, "dog": 0.3},
+    }
+    index = {"a": 0, "b": 1}
+    once = MergedLexicon(lexicon, index, "once")
+    assert once.entries("market") == {0: 0.5 + 0.1}
+    assert once.entries("unknown") == {0: 0.1}  # an unknown word takes its signature's
+    synproc = MergedLexicon(lexicon, index, "synproc")
+    # map order (sorted, uppercase first): UNK-LC, market (from a), then UNK-CAPS-DASH, dog
+    # UNK-LC comes before UNK-CAPS-DASH, so it gets that signature's entries unmerged
+    assert synproc.entries("unknown") == {0: 0.1, 1: 0.2}
+    # market comes after UNK-LC, so it gets UNK-LC's merged entries: the cascade
+    assert synproc.entries("market") == {0: 0.5 + 0.1, 1: 0.2}
+    # UNK-CAPS-DASH is its own signature and doubles
+    assert synproc.merged("UNK-CAPS-DASH") == {1: 0.4}
+
+
+@pytest.mark.parametrize(("max_sentences", "window"), [(1, 4096), (2, 4096), (2, 1)])
+def test_continuous_batching_keeps_results_and_order(max_sentences, window):
+    import math
+
+    from txtures.lvpcfg import leftcorner as lc
+    from txtures.lvpcfg.parser import Parser
+    from txtures.lvpcfg.synproc import Tables, reference_parse
+
+    model = lc.compile_model(_binary_toy_pcfg().without_unaries())
+    tables = Tables(model)
+    sentences = [
+        s.split()
+        for s in (
+            "the dogs see big cats .",
+            "big cats see",
+            "",
+            "the cats see .",
+            "big dogs see the cats .",
+        )
+    ]
+    parser = Parser(model, beam=20, working=4)
+    streamed = list(parser.parse_stream(sentences, max_sentences=max_sentences, window=window))
+    assert [index for index, _ in streamed] == list(range(len(sentences)))
+    for words, (_, result) in zip(sentences, streamed, strict=True):
+        if not words:
+            assert result == {"surprisal": [], "states": []}
+            continue
+        expected = reference_parse(tables, words, beam=20)
+        for a, b in zip(result["surprisal"], expected.surprisal, strict=True):
+            assert (math.isnan(a) and math.isnan(b)) or abs(a - b) < 1e-9
+        assert result["states"] == expected.states

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 
 from txtures.errors import TxturesError
@@ -76,11 +77,27 @@ def main(argv: list[str] | None = None) -> int:
     command("compare-export", "exporting a trained grammar against Berkeley's dump", grammar_dump)
     command("sentences", "write test sentences from WSJ", section, ("count", {"type": int}))
     command(
+        "gold-sentences",
+        "write non-FAIL test sentences and their gold gcg15 trees",
+        section,
+        ("count", {"type": int}),
+    )
+    command(
+        "modelblocks-merge",
+        "join chunked synproc outputs",
+        grammar_dump,
+        ("sentences", {"help": "a .linetoks name"}),
+        ("parts", {"type": int}),
+    )
+    command(
         "modelblocks-parse",
         "ModelBlocks' synproc on test sentences",
         grammar_dump,
         ("sentences", {"help": "a .linetoks name, such as wsj23-50"}),
         ("--beam", {"type": int, "default": 5000}),
+        ("--threads", {"type": int, "default": 8}),
+        ("--part", {"type": int, "help": "parse only this chunk (default: SLURM_ARRAY_TASK_ID)"}),
+        ("--parts", {"type": int, "help": "the number of chunks"}),
     )
     command(
         "parse",
@@ -88,12 +105,30 @@ def main(argv: list[str] | None = None) -> int:
         grammar_dump,
         ("sentences", {"help": "a .linetoks name"}),
         ("--beam", {"type": int, "default": 5000}),
+        ("--merge", {"choices": ["once", "synproc"], "default": "once"}),
+        ("--max-sentences", {"type": int, "default": 32}),
+    )
+    command(
+        "debug-beams",
+        "txtures' lexical entries and beams per word, in synproc_debug's format",
+        grammar_dump,
+        ("sentences", {"help": "a .linetoks name"}),
+        ("--beam", {"type": int, "default": 5000}),
+        ("--merge", {"choices": ["once", "synproc"], "default": "synproc"}),
+    )
+    command(
+        "compare-verbose",
+        "txtures' lexical entries and beams against synproc_debug's",
+        grammar_dump,
+        ("sentences", {"help": "a .linetoks name"}),
+        ("--merge", {"choices": ["once", "synproc"], "default": "synproc"}),
     )
     command(
         "compare-parse",
         "per-word surprisal against ModelBlocks'",
         grammar_dump,
         ("sentences", {"help": "a .linetoks name"}),
+        ("--merge", {"choices": ["once", "synproc"], "default": "once"}),
     )
     args = parser.parse_args(argv)
     try:
@@ -119,15 +154,30 @@ def main(argv: list[str] | None = None) -> int:
                     where, args.mode, args.grammar
                 ),
             }[name]()
-        elif name in ("sentences", "parse", "compare-parse"):
+        elif name in (
+            "sentences",
+            "gold-sentences",
+            "parse",
+            "compare-parse",
+            "debug-beams",
+            "compare-verbose",
+        ):
             from txtures.validation import parsing
 
             if name == "sentences":
                 print(parsing.sentences(where, args.section, args.count))
+            elif name == "gold-sentences":
+                print(parsing.gold_sentences(where, args.section, args.count))
             elif name == "parse":
-                parsing.parse(where, args.grammar, args.sentences, args.beam)
+                parsing.parse(
+                    where, args.grammar, args.sentences, args.beam, args.merge, args.max_sentences
+                )
+            elif name == "debug-beams":
+                parsing.debug_beams(where, args.grammar, args.sentences, args.beam, args.merge)
+            elif name == "compare-verbose":
+                parsing.compare_verbose(where, args.grammar, args.sentences, args.merge)
             else:
-                parsing.compare(where, args.grammar, args.sentences)
+                parsing.compare(where, args.grammar, args.sentences, args.merge)
         else:
             from txtures.validation import modelblocks
 
@@ -138,7 +188,18 @@ def main(argv: list[str] | None = None) -> int:
                 "compare-compiled": lambda: modelblocks.compare_compiled(where, args.grammar),
                 "compare-export": lambda: modelblocks.compare_export(where, args.grammar),
                 "modelblocks-parse": lambda: modelblocks.parse_reference(
-                    where, args.grammar, args.sentences, args.beam
+                    where,
+                    args.grammar,
+                    args.sentences,
+                    args.beam,
+                    args.threads,
+                    args.part
+                    if args.part is not None
+                    else (int(os.environ["SLURM_ARRAY_TASK_ID"]) if args.parts else None),
+                    args.parts,
+                ),
+                "modelblocks-merge": lambda: modelblocks.merge_parts(
+                    where, args.grammar, args.sentences, args.parts
                 ),
             }[name]()
     except TxturesError as error:

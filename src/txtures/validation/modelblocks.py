@@ -59,12 +59,44 @@ def compile_reference(paths: Paths, grammar: str) -> None:
 
 
 def parse_reference(
-    paths: Paths, grammar: str, sentences: str, beam: int = 5000, threads: int = 8
+    paths: Paths,
+    grammar: str,
+    sentences: str,
+    beam: int = 5000,
+    threads: int = 8,
+    part: int | None = None,
+    parts: int | None = None,
 ) -> None:
-    """ModelBlocks' synproc with its standard flags (`-c -u -b5000`) on a `.linetoks` file."""
+    """ModelBlocks' synproc with its standard flags (`-c -u -b5000`) on a `.linetoks` file.
+
+    With `part` and `parts`, only the part-th of `parts` contiguous chunks is
+    parsed (for Slurm arrays); `merge_parts` joins their outputs.
+    """
+    name = sentences
+    if parts is not None:
+        lines = (paths.mb / f"{sentences}.linetoks").read_text(encoding="utf-8").splitlines()
+        size = -(-len(lines) // parts)
+        name = f"{sentences}.part{part:03d}"
+        chunk = lines[part * size : (part + 1) * size]
+        (paths.mb / f"{name}.linetoks").write_text("\n".join(chunk) + "\n", encoding="utf-8")
     run(
         f"cd {paths.mb} && /usr/bin/time -v ./synproc -c -u -b{beam} -p{threads} {grammar}.synprocmodel "
-        f"< {sentences}.linetoks > {sentences}.{grammar}.tokdecs 2> {sentences}.{grammar}.stderr"
+        f"< {name}.linetoks > {name}.{grammar}.tokdecs 2> {name}.{grammar}.stderr"
+    )
+
+
+def merge_parts(paths: Paths, grammar: str, sentences: str, parts: int) -> None:
+    """Join the chunked synproc outputs of `parse_reference` in order (one header kept)."""
+    out = []
+    for part in range(parts):
+        lines = (
+            (paths.mb / f"{sentences}.part{part:03d}.{grammar}.tokdecs")
+            .read_text(encoding="utf-8")
+            .splitlines()
+        )
+        out += [line for line in lines if not line.startswith("word pos")]
+    (paths.mb / f"{sentences}.{grammar}.tokdecs").write_text(
+        "word pos f j store totsurp\n" + "\n".join(out) + "\n", encoding="utf-8"
     )
 
 

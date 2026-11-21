@@ -283,3 +283,73 @@ def reference_parse(
             states[t - 1] = state
             state = beams[t][state][1]
     return Parse(surprisal, states)
+
+
+class MergedLexicon:
+    """P(word | preterminal) with the unknown-word model merged in, as synproc does or once.
+
+    synproc adds, at load, each known word's signature entries to its own
+    (`synproc.cpp`, the loop after reading the model). With `merge="once"`
+    each word gets its signature's entries exactly once. With
+    `merge="synproc"` the result is synproc's: it visits words in its map's
+    order, which is the order of first appearance going through
+    preterminals in sorted order and each one's words in sorted order (the
+    order in which ModelBlocks writes and reads the model); a word gets its
+    signature's entries as they stand then, merged already when the
+    signature came earlier; a signature that is its own signature doubles;
+    and signatures that are not words are created, empty, after all words.
+    An unknown word takes its signature's merged entries.
+    """
+
+    def __init__(
+        self, lexicon: dict[str, dict[str, float]], index: dict[str, int], merge: str = "once"
+    ):
+        if merge not in ("once", "synproc"):
+            raise ValueError(f"lexicon merge must be once or synproc, not {merge!r}")
+        self.merge = merge
+        self.plain: dict[str, dict[int, float]] = {}
+        position: dict[str, int] = {}
+        for tag in sorted(lexicon):
+            if tag not in index:
+                continue
+            for word in sorted(lexicon[tag]):
+                if lexicon[tag][word] <= 0:
+                    continue  # ModelBlocks writes only positive entries (ccu2cc.py)
+                self.plain.setdefault(word, {})[index[tag]] = lexicon[tag][word]
+                position.setdefault(word, len(position))
+        self.position = position
+        self._merged: dict[str, dict[int, float]] = {}
+
+    def _pos(self, word: str) -> float:
+        return self.position.get(word, float("inf"))
+
+    def merged(self, key: str) -> dict[int, float]:
+        """The entries of a map key after synproc's merging (`merge="synproc"`)."""
+        if key in self._merged:
+            return self._merged[key]
+        entries = dict(self.plain.get(key, {}))
+        signature = berkeley_signature(key)
+        if signature == key:
+            entries = {t: 2 * p for t, p in entries.items()}
+        else:
+            source = (
+                self.merged(signature)
+                if self._pos(signature) < self._pos(key)
+                else self.plain.get(signature, {})
+            )
+            for tag, p in source.items():
+                entries[tag] = entries.get(tag, 0.0) + p
+        self._merged[key] = entries
+        return entries
+
+    def entries(self, word: str) -> dict[int, float]:
+        """synproc's lexical entries of a word: its own and its signature's."""
+        signature = berkeley_signature(word)
+        if self.merge == "synproc":
+            return self.merged(word) if word in self.plain else self.merged(signature)
+        if word not in self.plain:
+            return dict(self.plain.get(signature, {}))
+        merged = dict(self.plain[word])
+        for tag, p in self.plain.get(signature, {}).items():
+            merged[tag] = merged.get(tag, 0.0) + p
+        return merged

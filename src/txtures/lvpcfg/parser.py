@@ -36,7 +36,7 @@ from dataclasses import dataclass
 import torch
 
 from txtures.lvpcfg import leftcorner as lc
-from txtures.lvpcfg.synproc import berkeley_signature
+from txtures.lvpcfg.synproc import MergedLexicon
 
 NEG = -math.inf
 
@@ -58,7 +58,13 @@ class Beams:
 class Parser:
     """synproc's beam search with a compiled left-corner model, on one device."""
 
-    def __init__(self, model: lc.Compiled, beam: int = 5000, working: int | None = None):
+    def __init__(
+        self,
+        model: lc.Compiled,
+        beam: int = 5000,
+        working: int | None = None,
+        lexicon_merge: str = "once",
+    ):
         self.model = model
         self.beam = beam
         self.working = working or 2 * beam
@@ -105,23 +111,14 @@ class Parser:
         )
         self.first_any = model.first.sum(dim=2) > 0  # [depths, N]
         self._lexicon: dict[str, tuple[torch.Tensor, torch.Tensor]] = {}
-        self._entries: dict[str, dict[int, float]] = {}
-        for tag, words in model.lexicon.items():
-            if tag in model.index:
-                for word, p in words.items():
-                    self._entries.setdefault(word, {})[model.index[tag]] = p
+        self.merged = MergedLexicon(model.lexicon, model.index, lexicon_merge)
 
     # Lexicon
 
     def word_entries(self, word: str) -> tuple[torch.Tensor, torch.Tensor]:
-        """A word's preterminals and P(word | preterminal), with its signature's mass added."""
+        """A word's preterminals and P(word | preterminal), unknown-word mass merged in."""
         if word not in self._lexicon:
-            known = self._entries.get(word)
-            signature = self._entries.get(berkeley_signature(word), {})
-            merged = dict(signature) if known is None else dict(known)
-            if known is not None:
-                for tag, p in signature.items():
-                    merged[tag] = merged.get(tag, 0.0) + p
+            merged = self.merged.entries(word)
             tags = torch.tensor(list(merged), dtype=torch.long, device=self.device)
             probs = torch.tensor(list(merged.values()), dtype=torch.float64, device=self.device)
             self._lexicon[word] = (tags, probs)
@@ -215,9 +212,18 @@ class Parser:
             return _empty(self.slots, self.device), True
         entry, apex, base, partial = stage
         sentence = beams.sentence[entry]
+        # Bound each candidate's completion by its best word, fork, and preterminal.
+        depth = beams.size[entry] + beams.fork[entry] - beams.join[entry]
+        new_size = torch.where(apex == -1, torch.zeros_like(depth), depth)
+        brink = torch.where(apex == -1, torch.full_like(base, self.root), base)
+        bounded = partial + self._completion_bound(sentence, new_size, brink, words)
+        alive = torch.isfinite(bounded)
+        entry, apex, base, partial, sentence, bounded = (
+            x[alive] for x in (entry, apex, base, partial, sentence, bounded)
+        )
         working = self.working
         while True:
-            kept, pruned_best = _top_per_sentence(sentence, partial, working)
+            kept, pruned_best = _top_per_sentence(sentence, bounded, working)
             store, size, store_id, _ = self._stores(beams, entry[kept], apex[kept], base[kept])
             new = self._word(
                 beams,
@@ -235,8 +241,41 @@ class Parser:
                 return new, True
             working *= 2
 
+    def _completion_bound(self, sentence, size, brink, words) -> torch.Tensor:
+        """log of an upper bound on P(word, fork, preterminal | new store) for each candidate.
+
+        It is the best over the word's preterminals and both forks; the join's
+        probability, at most 1, is left out. It depends only on the new store's
+        size and base, so it is computed once per distinct pair.
+        """
+        dev = self.device
+        out = torch.full(size.shape, NEG, dtype=torch.float64, device=dev)
+        for s in torch.unique(sentence).tolist():
+            tags, pw = self.word_entries(words[s])
+            if len(tags) == 0:
+                continue
+            mine = torch.nonzero(sentence == s).squeeze(1)
+            unique, inverse = torch.unique(size[mine] * self.n + brink[mine], return_inverse=True)
+            d, b = unique // self.n, unique % self.n
+            ok = d <= lc.MAX_DEPTH
+            dd = d.clamp(max=lc.MAX_DEPTH)
+            f0, f1 = self.f0[dd, b], self.f1[dd, b]
+            total = f0 + f1
+            lexical = torch.zeros(self.n, dtype=torch.float64, device=dev)
+            lexical[tags] = pw
+            term = self.terminal[(dd + 1).clamp(max=lc.MAX_DEPTH + 1)][:, tags]
+            fork1 = (self.plus[dd, b][:, tags] * term * pw).max(dim=1).values
+            fork0 = f0 * lexical[b]
+            best = torch.maximum(fork0, fork1) / torch.where(
+                total > 0, total, torch.ones_like(total)
+            )
+            usable = ok & (total > 0) & (best > 0)
+            best = torch.where(usable, torch.log(best), torch.full_like(best, NEG))
+            out[mine] = best[inverse]
+        return out
+
     def _word(
-        self, beams, entry, store, size, store_id, score, sentence, words, last, chunk=1 << 22
+        self, beams, entry, store, size, store_id, score, sentence, words, last, chunk=1 << 25
     ):
         """Stage 2: preterminal, fork, and join for every stage-1 survivor, in chunks.
 
@@ -273,45 +312,62 @@ class Parser:
         return Beams(sent, tag, fork, join, store[e], size[e], total, entry[e])
 
     def _candidates(self, part, tags, pw, size, brink, anc0, top_apex, score, last):
-        """Scores of every (survivor, preterminal, fork, join) for one sentence's chunk."""
-        m, t = len(part), len(tags)
-        e = part.repeat_interleave(t)
-        tag = tags.repeat(m)
-        p_w = pw.repeat(m)
-        d, b = size[e], brink[e]
+        """Scores of every (survivor, preterminal, fork, join) for one sentence's chunk.
+
+        Only candidates with a nonzero probability are built: with fork 0 the
+        preterminal must be the store's base, and with fork 1 only
+        preterminals the base can reach get a join.
+        """
+        dev = self.device
+        d, b = size[part], brink[part]
         ok = d <= lc.MAX_DEPTH
         dd = d.clamp(max=lc.MAX_DEPTH)
-        total_f = self.f0[dd, b] + self.f1[dd, b]
+        f0, f1 = self.f0[dd, b], self.f1[dd, b]
+        total_f = torch.where(ok & (f0 + f1 > 0), f0 + f1, torch.zeros_like(f0))
+        lexical = torch.zeros(self.n, dtype=torch.float64, device=dev)
+        lexical[tags] = pw
+        pieces = []
+        # fork 0: the preterminal is the base itself
+        keep = (total_f > 0) & (f0 > 0) & (lexical[b] > 0)
+        rows = torch.nonzero(keep).squeeze(1)
+        if len(rows):
+            weight = f0[rows] / total_f[rows] * lexical[b[rows]]
+            pieces.append((rows, b[rows], 0, weight, anc0[part[rows]], top_apex[part[rows]]))
+        # fork 1: preterminals reachable from the base
+        term = self.terminal[(dd + 1).clamp(max=lc.MAX_DEPTH + 1)][:, tags]
+        weight = (
+            self.plus[dd, b][:, tags]
+            * term
+            * pw
+            / torch.where(total_f > 0, total_f, torch.ones_like(total_f)).unsqueeze(1)
+        )
+        weight = torch.where((total_f > 0).unsqueeze(1), weight, torch.zeros_like(weight))
+        rows, columns = torch.nonzero(weight > 0, as_tuple=True)
+        if len(rows):
+            pieces.append((rows, tags[columns], 1, weight[rows, columns], b[rows], tags[columns]))
         found = []
-        for fork in (0, 1):
-            if fork == 0:
-                p_f = self.f0[dd, b] / total_f
-                p_p = (tag == b).to(torch.float64)
-                anc, lch = anc0[e], top_apex[e]
-            else:
-                p_f = self.f1[dd, b] / total_f
-                term = self.terminal[(dd + 1).clamp(max=lc.MAX_DEPTH + 1), tag]
-                p_p = self.plus[dd, b, tag] * term / self.f1[dd, b]
-                anc, lch = b, tag
-            join_depth = d + fork
+        for rows, tag, fork, weight, anc, lch in pieces:
+            join_depth = d[rows] + fork
             jd = (join_depth - 1).clamp(min=0, max=lc.MAX_DEPTH)
             j_ok = (join_depth >= 1) & (join_depth <= lc.MAX_DEPTH + 1)
             j0, j1 = self.j0[jd, anc, lch], self.j1[jd, anc, lch]
             total_j = j0 + j1
+            safe = torch.where(total_j > 0, total_j, torch.ones_like(total_j))
             for join, j in ((0, j0), (1, j1)):
-                final_size = d + fork - join
+                final_size = join_depth - join
                 allowed = final_size == 0 if last else final_size > 0
-                prob = p_w * p_f * p_p * j / total_j
-                good = ok & j_ok & allowed & (total_f > 0) & (total_j > 0) & (prob > 0)
-                if good.any():
-                    g = torch.nonzero(good).squeeze(1)
+                prob = weight * j / safe
+                good = j_ok & allowed & (total_j > 0) & (prob > 0)
+                g = torch.nonzero(good).squeeze(1)
+                if len(g):
+                    e = part[rows[g]]
                     found.append(
                         (
-                            e[g],
+                            e,
                             tag[g],
                             torch.full_like(g, fork),
                             torch.full_like(g, join),
-                            score[e[g]] + torch.log(prob[g]),
+                            score[e] + torch.log(prob[g]),
                         )
                     )
         if not found:
@@ -320,59 +376,133 @@ class Parser:
 
     # Sentences
 
-    def parse(self, sentences: list[list[str]]) -> list[dict]:
-        """Parse sentences together; per sentence, per-word surprisal (bits) and the best states."""
+    def parse(
+        self, sentences: list[list[str]], max_sentences: int = 32, window: int = 4096
+    ) -> list[dict]:
+        """Parse sentences; per sentence, per-word surprisal (bits) and the best states."""
+        return [result for _, result in self.parse_stream(sentences, max_sentences, window)]
+
+    def parse_stream(self, sentences, max_sentences: int = 32, window: int = 4096):
+        """Yield `(index, result)` for each sentence, in input order, parsing many at once.
+
+        Sentences are admitted as others finish, up to `max_sentences` at a
+        time, each advancing through its own words; finished results wait in
+        a buffer until every earlier sentence is done. Admission never runs
+        more than `window` sentences ahead of the oldest unfinished one.
+        """
         dev = self.device
+        sentences = list(sentences)
         count = len(sentences)
-        start = Beams(
-            torch.arange(count, device=dev),
-            torch.full((count,), -1, device=dev),
-            torch.zeros(count, dtype=torch.long, device=dev),
-            torch.ones(count, dtype=torch.long, device=dev),
-            torch.full((count, self.slots, 2), -1, dtype=torch.long, device=dev),
-            torch.ones(count, dtype=torch.long, device=dev),
-            torch.zeros(count, dtype=torch.float64, device=dev),
-            torch.full((count,), -1, device=dev),
+        position = [0] * count  # next word of each sentence
+        surprisal: dict[int, list[float]] = {}
+        started: dict[int, int] = {}  # sentence -> step at which it was admitted
+        finished: dict[int, dict] = {}
+        history: dict[int, Beams] = {}
+        beams = _empty(self.slots, dev)
+        queue, step, emitted = 0, 0, 0
+        while emitted < count:
+            # admit sentences, empty ones finishing at once
+            active = set(beams.sentence.unique().tolist()) if len(beams.sentence) else set()
+            new = []
+            while (
+                queue < count
+                and len(active) + len(new) < max_sentences
+                and queue < emitted + window
+            ):
+                if not sentences[queue]:
+                    finished[queue] = {"surprisal": [], "states": []}
+                else:
+                    new.append(queue)
+                queue += 1
+            if new:
+                beams = _concat(beams, self._start(new, step))
+                for s in new:
+                    started[s], surprisal[s] = step, []
+            while emitted < count and emitted in finished:
+                yield emitted, finished.pop(emitted)
+                emitted += 1
+            if not len(beams.sentence):
+                continue
+            history[step] = beams
+            words = {s: sentences[s][position[s]] for s in beams.sentence.unique().tolist()}
+            last = {s: position[s] + 1 == len(sentences[s]) for s in words}
+            new_beams, _ = self.step(beams, _Lookup(words), _Lookup(last))
+            self._surprisal(beams, new_beams, words, surprisal)
+            step += 1
+            history[step] = new_beams
+            done = [s for s in words if last[s] or not (new_beams.sentence == s).any()]
+            for s in words:
+                position[s] += 1
+            for s in done:
+                finished[s] = {
+                    "surprisal": surprisal.pop(s) + [math.nan] * (len(sentences[s]) - position[s]),
+                    "states": _best_path(history, s, started.pop(s), step, len(sentences[s])),
+                }
+            keep = torch.ones(len(new_beams.sentence), dtype=torch.bool, device=dev)
+            for s in done:
+                keep &= new_beams.sentence != s
+            beams = _select(new_beams, keep)
+            oldest = min(started.values(), default=step)
+            for k in [k for k in history if k < oldest]:
+                del history[k]
+            # the next step's backpointers index `beams`, a selection of new_beams
+            history[step] = beams
+            while emitted < count and emitted in finished:
+                yield emitted, finished.pop(emitted)
+                emitted += 1
+
+    def _start(self, new: list[int], step: int) -> Beams:
+        dev, n = self.device, len(new)
+        return Beams(
+            torch.tensor(new, dtype=torch.long, device=dev),
+            torch.full((n,), -1, dtype=torch.long, device=dev),
+            torch.zeros(n, dtype=torch.long, device=dev),
+            torch.ones(n, dtype=torch.long, device=dev),
+            torch.full((n, self.slots, 2), -1, dtype=torch.long, device=dev),
+            torch.ones(n, dtype=torch.long, device=dev),
+            torch.zeros(n, dtype=torch.float64, device=dev),
+            torch.full((n,), -1, dtype=torch.long, device=dev),
         )
-        lengths = torch.tensor([len(s) for s in sentences], device=dev)
-        history = [start]
-        surprisal = [[] for _ in sentences]
-        beams = start
-        t = 0
-        while True:
-            active = lengths[beams.sentence] > t if len(beams.sentence) else beams.sentence.bool()
-            if not active.any():
-                break
-            selected = torch.nonzero(active).squeeze(1)
-            current = _select(beams, active)
-            words = [s[t] if t < len(s) else "" for s in sentences]
-            last = lengths == t + 1
-            new, _ = self.step(current, words, last)
-            # surprisal: log2 of the previous beam's total over the current one's
-            for s in torch.unique(current.sentence).tolist():
-                before = current.score[current.sentence == s]
-                after = new.score[new.sentence == s]
-                if len(after) == 0:
-                    surprisal[s].append(math.nan)
-                    continue
-                reference = before.max()
-                surprisal[s].append(
-                    float(
-                        (
-                            torch.logsumexp(before - reference, 0)
-                            - torch.logsumexp(after - reference, 0)
-                        )
-                        / math.log(2)
-                    )
-                )
-            new.back = selected[new.back]  # an index into the previous beams
-            history.append(new)
-            beams = new
-            t += 1
-        return [
-            {"surprisal": surprisal[s], "states": _best_path(history, s, self.model)}
-            for s in range(count)
-        ]
+
+    def _surprisal(self, before: Beams, after: Beams, words, surprisal) -> None:
+        """log2 of each sentence's previous beam total over its current one, from its best."""
+        sentences = torch.tensor(sorted(words), dtype=torch.long, device=self.device)
+        index_b = torch.searchsorted(sentences, before.sentence)
+        best = torch.full((len(sentences),), NEG, dtype=torch.float64, device=self.device)
+        best.scatter_reduce_(0, index_b, before.score, reduce="amax")
+        prev = torch.zeros_like(best).index_add_(
+            0, index_b, torch.exp(before.score - best[index_b])
+        )
+        curr = torch.zeros_like(best)
+        if len(after.sentence):
+            index_a = torch.searchsorted(sentences, after.sentence)
+            curr.index_add_(0, index_a, torch.exp(after.score - best[index_a]))
+        values = ((torch.log(prev) - torch.log(curr)) / math.log(2)).tolist()
+        for s, v in zip(sentences.tolist(), values, strict=True):
+            surprisal[s].append(v if math.isfinite(v) else math.nan)
+
+
+class _Lookup:
+    """`words[s]` and `last[s]` for the step methods, from a dict."""
+
+    def __init__(self, table: dict):
+        self.table = table
+
+    def __getitem__(self, key):
+        return self.table[int(key)]
+
+
+def _concat(a: Beams, b: Beams) -> Beams:
+    return Beams(
+        *(
+            torch.cat([x, y])
+            for x, y in zip(
+                (a.sentence, a.pretrm, a.fork, a.join, a.store, a.size, a.score, a.back),
+                (b.sentence, b.pretrm, b.fork, b.join, b.store, b.size, b.score, b.back),
+                strict=True,
+            )
+        )
+    )
 
 
 def _empty(slots: int, device) -> Beams:
@@ -424,8 +554,9 @@ def _fold(running, candidate, beam: int):
     sent, sid, tag, fork, join, total, e = (
         x[order] for x in (sent, sid, tag, fork, join, total, e)
     )
-    key = torch.stack([sent, sid, tag, fork, join], dim=1)
-    unique, inverse = torch.unique(key, dim=0, return_inverse=True)
+    # one int64 per state: sentence (14 bits), store (24), preterminal (15), fork, join
+    key = (((sent << 24 | sid) << 15 | tag) << 2) | (fork << 1) | join
+    unique, inverse = torch.unique(key, return_inverse=True)
     first = torch.full((len(unique),), len(total), dtype=torch.long, device=total.device)
     first.scatter_reduce_(0, inverse, torch.arange(len(total), device=total.device), reduce="amin")
     sent, sid, tag, fork, join, total, e = (
@@ -462,16 +593,16 @@ def _kth_per_sentence(sentence: torch.Tensor, score: torch.Tensor, k: int) -> di
     return {s: (v if counts[s] >= k else NEG) for s, v in out.items()}
 
 
-def _best_path(history, s: int, model: lc.Compiled) -> list[tuple]:
-    path = []
-    index = None
-    for t in range(len(history) - 1, 0, -1):
-        beams = history[t]
-        if index is None:
-            mine = torch.nonzero(beams.sentence == s).squeeze(1)
-            if len(mine) == 0:
-                continue
-            index = int(mine[torch.argmax(beams.score[mine])])
+def _best_path(history: dict, s: int, start: int, end: int, length: int) -> list:
+    """The best states of sentence `s`, admitted at step `start`, last advanced to step `end`."""
+    path: list = []
+    beams = history[end]
+    mine = torch.nonzero(beams.sentence == s).squeeze(1)
+    if len(mine) == 0:
+        return [None] * length
+    index = int(mine[torch.argmax(beams.score[mine])])
+    for k in range(end, start, -1):
+        beams = history[k]
         store = beams.store[index]
         size = int(beams.size[index])
         path.append(
@@ -479,7 +610,7 @@ def _best_path(history, s: int, model: lc.Compiled) -> list[tuple]:
                 int(beams.pretrm[index]),
                 int(beams.fork[index]),
                 int(beams.join[index]),
-                tuple((int(store[k, 0]), int(store[k, 1])) for k in range(size)),
+                tuple((int(store[j, 0]), int(store[j, 1])) for j in range(size)),
             )
         )
         index = int(beams.back[index])
