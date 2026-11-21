@@ -221,9 +221,18 @@ class Parser:
         entry, apex, base, partial, sentence, bounded = (
             x[alive] for x in (entry, apex, base, partial, sentence, bounded)
         )
-        working = self.working
+        if len(sentence) == 0:
+            return _empty(self.slots, self.device), True
+        # Each sentence has its own working size; a sentence whose pruning could
+        # have changed its beam is redone alone, with twice the room.
+        dev = self.device
+        work = torch.full((int(sentence.max()) + 1,), self.working, dtype=torch.long, device=dev)
+        todo = torch.ones_like(work, dtype=torch.bool)
+        done: list[Beams] = []
         while True:
-            kept, pruned_best = _top_per_sentence(sentence, bounded, working)
+            subset = torch.nonzero(todo[sentence]).squeeze(1)
+            kept, pruned_best = _top_per_sentence(sentence[subset], bounded[subset], work)
+            kept = subset[kept]
             store, size, store_id, _ = self._stores(beams, entry[kept], apex[kept], base[kept])
             new = self._word(
                 beams,
@@ -237,9 +246,15 @@ class Parser:
                 last,
             )
             threshold = _kth_per_sentence(new.sentence, new.score, self.beam)
-            if all(bound <= threshold.get(s, NEG) for s, bound in pruned_best.items()):
-                return new, True
-            working *= 2
+            violators = [s for s, bound in pruned_best.items() if bound > threshold.get(s, NEG)]
+            redo = torch.zeros_like(todo)
+            if violators:
+                redo[torch.tensor(violators, device=dev)] = True
+            done.append(_select(new, ~redo[new.sentence]) if len(new.sentence) else new)
+            if not violators:
+                return _concat_all(done, self.slots, dev), True
+            work[redo] *= 2
+            todo = redo
 
     def _completion_bound(self, sentence, size, brink, words) -> torch.Tensor:
         """log of an upper bound on P(word, fork, preterminal | new store) for each candidate.
@@ -305,7 +320,7 @@ class Parser:
                     continue
                 e, tag, fork, join, total = found
                 candidate = (sentence[e], store_id[e], tag, fork, join, total, e)
-                running = _fold(running, candidate, self.beam)
+                running = _fold(running, candidate, self.beam, self.n)
         if running is None:
             return _empty(self.slots, dev)
         sent, sid, tag, fork, join, total, e = running
@@ -545,7 +560,7 @@ def _expand(starts: torch.Tensor, counts: torch.Tensor, owners: torch.Tensor):
     return torch.repeat_interleave(starts, counts) + offset, owner
 
 
-def _fold(running, candidate, beam: int):
+def _fold(running, candidate, beam: int, symbols: int):
     """Merge candidates into the running beam: best per state, then each sentence's `beam` best."""
     if running is not None:
         candidate = tuple(torch.cat([a, b]) for a, b in zip(running, candidate, strict=True))
@@ -554,8 +569,11 @@ def _fold(running, candidate, beam: int):
     sent, sid, tag, fork, join, total, e = (
         x[order] for x in (sent, sid, tag, fork, join, total, e)
     )
-    # one int64 per state: sentence (14 bits), store (24), preterminal (15), fork, join
-    key = (((sent << 24 | sid) << 15 | tag) << 2) | (fork << 1) | join
+    # one int64 per state: sentence (14 bits), store (24), preterminal, fork, join
+    tag_bits = max(1, (symbols - 1).bit_length())
+    if 14 + 24 + tag_bits + 2 > 63:
+        raise ValueError(f"{symbols} symbols are too many to pack a state key")
+    key = (((sent << 24 | sid) << tag_bits | tag) << 2) | (fork << 1) | join
     unique, inverse = torch.unique(key, return_inverse=True)
     first = torch.full((len(unique),), len(total), dtype=torch.long, device=total.device)
     first.scatter_reduce_(0, inverse, torch.arange(len(total), device=total.device), reduce="amin")
@@ -566,15 +584,19 @@ def _fold(running, candidate, beam: int):
     return tuple(x[kept] for x in (sent, sid, tag, fork, join, total, e))
 
 
-def _top_per_sentence(sentence: torch.Tensor, score: torch.Tensor, k: int):
-    """Indices of each sentence's `k` best scores, and each sentence's best score not kept."""
+def _top_per_sentence(sentence: torch.Tensor, score: torch.Tensor, k):
+    """Indices of each sentence's `k` best scores, and each sentence's best score not kept.
+
+    `k` is a number, or a tensor giving each sentence's (indexed by sentence).
+    """
     order = torch.argsort(score, descending=True, stable=True)
     order = order[torch.argsort(sentence[order], stable=True)]
     sorted_sentence = sentence[order]
     starts = torch.searchsorted(sorted_sentence, sorted_sentence, right=False)
     rank = torch.arange(len(order), device=score.device) - starts
-    kept = order[rank < k]
-    pruned = order[rank == k]
+    limit = k[sorted_sentence] if isinstance(k, torch.Tensor) else k
+    kept = order[rank < limit]
+    pruned = order[rank == limit]
     best = {
         int(s): float(v)
         for s, v in zip(sentence[pruned].tolist(), score[pruned].tolist(), strict=True)
@@ -584,13 +606,23 @@ def _top_per_sentence(sentence: torch.Tensor, score: torch.Tensor, k: int):
 
 def _kth_per_sentence(sentence: torch.Tensor, score: torch.Tensor, k: int) -> dict[int, float]:
     """Each sentence's `k`-th best score, or -inf where it has fewer than `k`."""
-    kept, _ = _top_per_sentence(sentence, score, k)
-    out: dict[int, float] = {}
-    counts: dict[int, int] = {}
-    for s, v in zip(sentence[kept].tolist(), score[kept].tolist(), strict=True):
-        counts[s] = counts.get(s, 0) + 1
-        out[s] = min(out.get(s, math.inf), v)
-    return {s: (v if counts[s] >= k else NEG) for s, v in out.items()}
+    if len(sentence) == 0:
+        return {}
+    order = torch.argsort(score, descending=True, stable=True)
+    order = order[torch.argsort(sentence[order], stable=True)]
+    sorted_sentence = sentence[order]
+    starts = torch.searchsorted(sorted_sentence, sorted_sentence, right=False)
+    rank = torch.arange(len(order), device=score.device) - starts
+    at = order[rank == k - 1]
+    found = dict(zip(sentence[at].tolist(), score[at].tolist(), strict=True))
+    return {s: found.get(s, NEG) for s in torch.unique(sentence).tolist()}
+
+
+def _concat_all(parts: list[Beams], slots: int, device) -> Beams:
+    out = _empty(slots, device)
+    for part in parts:
+        out = _concat(out, part)
+    return out
 
 
 def _best_path(history: dict, s: int, start: int, end: int, length: int) -> list:

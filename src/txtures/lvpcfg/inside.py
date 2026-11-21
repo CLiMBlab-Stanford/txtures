@@ -27,6 +27,7 @@ from dataclasses import dataclass
 
 import numpy as np
 import torch
+import torch.utils.checkpoint
 
 LEXICAL, UNARY, BINARY = 0, 1, 2
 
@@ -147,9 +148,7 @@ def log_likelihoods(
             scores = torch.einsum("nab,nb->na", unary[level.index], inside[level.left])
             below = log_scale[level.left]
         else:
-            scores = torch.einsum(
-                "nabc,nb,nc->na", binary[level.index], inside[level.left], inside[level.right]
-            )
+            scores = _binary_scores(binary, level.index, inside[level.left], inside[level.right])
             below = log_scale[level.left] + log_scale[level.right]
         if node_offsets is not None:
             scores = scores + node_offsets[level.nodes]
@@ -157,6 +156,37 @@ def log_likelihoods(
         inside[level.start : level.stop] = scores / total.unsqueeze(1)
         log_scale[level.start : level.stop] = below + torch.log(total)
     return log_scale[encoded.roots] + torch.log(inside[encoded.roots, 0])
+
+
+BINARY_CHUNK = 1 << 28
+"""The most gathered rule weights (elements) one binary level computes at once."""
+
+
+def _binary_scores(binary, index, left, right) -> torch.Tensor:
+    """`Σ_{b,c} R[a, b, c] left[b] right[c]` for each node, with `R = binary[index]`.
+
+    Gathering every node's rule weights at once takes `nodes · S³` elements;
+    levels larger than `BINARY_CHUNK` are done in chunks, each recomputed in
+    the backward pass instead of kept, so memory stays bounded as `S` grows.
+    Levels within the bound are computed in one call, as before.
+    """
+
+    def scores(index, left, right):
+        return torch.einsum("nabc,nb,nc->na", binary[index], left, right)
+
+    per_node = binary[0].numel()
+    if len(index) * per_node <= BINARY_CHUNK:
+        return scores(index, left, right)
+    step = max(1, BINARY_CHUNK // per_node)
+    grad = torch.is_grad_enabled() and (binary.requires_grad or left.requires_grad)
+    parts = []
+    for begin in range(0, len(index), step):
+        chunk = (index[begin : begin + step], left[begin : begin + step], right[begin : begin + step])
+        if grad:
+            parts.append(torch.utils.checkpoint.checkpoint(scores, *chunk, use_reentrant=False))
+        else:
+            parts.append(scores(*chunk))
+    return torch.cat(parts)
 
 
 def expected_counts(
@@ -215,8 +245,6 @@ def _normalized_inside(encoded, binary, unary, lexical) -> torch.Tensor:
         elif level.kind == UNARY:
             scores = torch.einsum("nab,nb->na", unary[level.index], inside[level.left])
         else:
-            scores = torch.einsum(
-                "nabc,nb,nc->na", binary[level.index], inside[level.left], inside[level.right]
-            )
+            scores = _binary_scores(binary, level.index, inside[level.left], inside[level.right])
         inside[level.start : level.stop] = scores / scores.sum(dim=1, keepdim=True)
     return inside[encoded.position]

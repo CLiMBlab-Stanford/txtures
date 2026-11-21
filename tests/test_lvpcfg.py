@@ -731,3 +731,27 @@ def test_trees_are_normalized_alike_for_scoring():
         "(S (N-aD dogs) (V-aN bark))"
     )
     assert str(unlabeled(gold_for_scoring(gold))) == "(X (X dogs) (X bark))"
+
+
+def test_chunked_binary_level_matches_one_call(monkeypatch):
+    import torch
+
+    from txtures.lvpcfg import inside
+
+    torch.manual_seed(0)
+    binary = torch.rand(5, 4, 4, 4, dtype=torch.float64, requires_grad=True)
+    index = torch.randint(0, 5, (37,))
+    left = torch.rand(37, 4, dtype=torch.float64, requires_grad=True)
+    right = torch.rand(37, 4, dtype=torch.float64)
+
+    def run():
+        out = inside._binary_scores(binary, index, left, right)
+        return out, torch.autograd.grad((out**2).sum(), [binary, left])
+
+    whole, (gb, gl) = run()
+    monkeypatch.setattr(inside, "BINARY_CHUNK", 5 * 64)  # chunks of 5 nodes
+    chunked, (cb, cl) = run()
+    torch.testing.assert_close(chunked, whole, rtol=0, atol=0)
+    torch.testing.assert_close(cl, gl, rtol=0, atol=0)
+    # gradients of shared rules are summed across chunks in a different order
+    torch.testing.assert_close(cb, gb, rtol=1e-13, atol=0)
