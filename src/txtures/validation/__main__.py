@@ -107,6 +107,7 @@ def main(argv: list[str] | None = None) -> int:
         ("--beam", {"type": int, "default": 5000}),
         ("--merge", {"choices": ["once", "synproc"], "default": "once"}),
         ("--max-sentences", {"type": int, "default": 32}),
+        ("--device", {"default": "cuda", "help": "a torch device, such as cuda or cpu"}),
     )
     command(
         "debug-beams",
@@ -180,7 +181,8 @@ def main(argv: list[str] | None = None) -> int:
                 print(parsing.gold_sentences(where, args.section, args.count))
             elif name == "parse":
                 parsing.parse(
-                    where, args.grammar, args.sentences, args.beam, args.merge, args.max_sentences
+                    where, args.grammar, args.sentences, args.beam, args.merge, args.max_sentences,
+                    args.device,
                 )
             elif name == "debug-beams":
                 parsing.debug_beams(where, args.grammar, args.sentences, args.beam, args.merge)
