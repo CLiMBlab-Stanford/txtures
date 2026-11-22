@@ -70,6 +70,8 @@ table = tx.compute("surprisal", ["The horse raced past the barn fell."])
 
 See the [documentation](https://txtures.readthedocs.io), starting with
 [Getting started](https://txtures.readthedocs.io/en/latest/getting-started/).
+The treebank, grammar, and parser behind the syntactic measures come from
+[prsr](https://prsr.readthedocs.io).
 
 ## Development
 

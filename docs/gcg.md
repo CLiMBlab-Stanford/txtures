@@ -61,7 +61,8 @@ The trees are made exactly as ModelBlocks makes `%.gcg15.senttrees`:
 6. The original treebank categories (`-f` tags) are removed and each
    attachment operator is moved to the end of its category.
 
-These steps run in the prsr package (`prsr.gcg`), a Python port of the
+These steps run in the [prsr](https://prsr.readthedocs.io) package
+(`prsr.gcg`), a Python port of the
 ModelBlocks scripts
 `editabletrees2linetrees.pl`, `make-trees-fixed.pl`, `annotate-gcg15.pl`,
 `killUnaries.pl`, and `makefailtrees.py`, with the rules of the Perl

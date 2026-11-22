@@ -145,25 +145,11 @@ to pytest.
 
 ## Validating against reference implementations
 
-Some modules reimplement older software and are checked against it on full
-treebanks: the gcg15 reannotation (`txtures.gcg`) against ModelBlocks' Perl,
-the latent-variable PCFG trainer (`txtures.lvpcfg`) against the Berkeley
-parser's `GrammarTrainer`, and the left-corner compilation and synproc parser
-against ModelBlocks' C++. These checks are too large for the test suite and
-need the licensed Penn Treebank, so they live in `txtures.validation`:
-
-```bash
-export TXTURES_VALIDATION_WORK=/path/to/work TXTURES_MODELBLOCKS=/path/to/modelblocks-release
-python -m txtures.validation --help                  # the commands, in pipeline order
-python -m txtures.validation gcg15-reference 23
-python -m txtures.validation gcg15-compare 23
-```
-
-The work directory receives treebank-derived files; keep it private. Run
-the long commands as Slurm jobs, for example
-`sbatch --wrap "python -m txtures.validation berkeley-train 2"`. Rerun the
-relevant check after changing these modules, and record new results with
-the evidence for the change.
+The gcg15 reannotation, the latent-variable PCFG trainer, the left-corner
+compilation, and the synproc parser come from
+[prsr](https://github.com/CLiMBlab-Stanford/prsr). Their checks against
+ModelBlocks and the Berkeley parser on full treebanks live there, as
+`python -m prsr.validation`.
 
 ## Releases and compatibility
 
