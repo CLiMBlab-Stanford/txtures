@@ -99,6 +99,7 @@ def table_manifest(plan: Plan, modules: Sequence[str] | None) -> dict[str, Any]:
                 "name": column.name,
                 "module": planned.name,
                 "feature": column.feature,
+                "workflow": column.workflow,
                 "variant": planned.identity,
             }
             for column, planned in plan.column_variants()

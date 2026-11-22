@@ -181,7 +181,11 @@ def _binary_scores(binary, index, left, right) -> torch.Tensor:
     grad = torch.is_grad_enabled() and (binary.requires_grad or left.requires_grad)
     parts = []
     for begin in range(0, len(index), step):
-        chunk = (index[begin : begin + step], left[begin : begin + step], right[begin : begin + step])
+        chunk = (
+            index[begin : begin + step],
+            left[begin : begin + step],
+            right[begin : begin + step],
+        )
         if grad:
             parts.append(torch.utils.checkpoint.checkpoint(scores, *chunk, use_reentrant=False))
         else:

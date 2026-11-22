@@ -181,7 +181,12 @@ def main(argv: list[str] | None = None) -> int:
                 print(parsing.gold_sentences(where, args.section, args.count))
             elif name == "parse":
                 parsing.parse(
-                    where, args.grammar, args.sentences, args.beam, args.merge, args.max_sentences,
+                    where,
+                    args.grammar,
+                    args.sentences,
+                    args.beam,
+                    args.merge,
+                    args.max_sentences,
                     args.device,
                 )
             elif name == "debug-beams":

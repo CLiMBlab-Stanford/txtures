@@ -307,7 +307,8 @@ def merge(
         w = weights[c]
         for s, t in enumerate(mapping[c]):
             members = np.nonzero(mapping[c] == t)[0]
-            m[t, s] = 1.0 if len(members) == 1 else w[s] / w[members].sum()
+            total = w[members].sum()
+            m[t, s] = w[s] / total if total > 0 else 1.0 / len(members)
         return m
 
     binary = {

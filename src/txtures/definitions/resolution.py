@@ -288,42 +288,90 @@ class Column:
     name: str
     feature: str
     variant: Variant
+    workflow: str
+
+
+MODULE_REQUEST = re.compile(r"(?P<module>[^:]+)(?::(?P<workflow>[^:]+))?")
+"""A requested module, optionally with the workflow to use for it: `pcfg` or `pcfg:sm1`."""
+
+
+def parse_request(text: str, default: str) -> tuple[str, str]:
+    """Split a module request such as `pcfg:sm1` into its module and workflow.
+
+    A request without `:` uses the `default` workflow.
+
+    Raises:
+        DefinitionError: The request is malformed or names a malformed workflow ID.
+    """
+    match = MODULE_REQUEST.fullmatch(text)
+    workflow = match and (match["workflow"] or default)
+    if match is None or not ID_PATTERN.fullmatch(workflow):
+        raise DefinitionError(
+            [
+                Problem(
+                    f"workflow {default}",
+                    f"malformed module request {text!r}; use MODULE or MODULE:WORKFLOW",
+                )
+            ]
+        )
+    return match["module"], workflow
 
 
 @dataclass(frozen=True)
 class Expansion:
-    """The variants a workflow request needs, by module in dependency order."""
+    """The variants a workflow request needs, by module in dependency order.
+
+    `workflow` is the request's default workflow. `requests` lists each
+    requested module with the workflow it uses, in request order, and
+    `selected` holds the variants of each such request. `variants` holds
+    every needed variant once, by module.
+    """
 
     workflow: str
-    requested: tuple[str, ...]
+    requests: tuple[tuple[str, str], ...]
+    selected: Mapping[tuple[str, str], tuple[Variant, ...]]
     variants: Mapping[str, tuple[Variant, ...]]
+
+    @property
+    def requested(self) -> tuple[str, ...]:
+        """The requests as text: `MODULE`, or `MODULE:WORKFLOW` for another workflow."""
+        return tuple(
+            module if workflow == self.workflow else f"{module}:{workflow}"
+            for module, workflow in self.requests
+        )
 
     def columns(self, registry: Registry = REGISTRY) -> tuple[Column, ...]:
         """Return the feature columns of the requested modules, in request order.
 
-        A column's name is its feature followed by its variant's labels.
+        A column's name is its feature followed by its variant's labels and,
+        for a module requested under more than one workflow, the workflow ID.
         Where two columns would share a name, those columns use the longer
         form of their identifying labels, such as `EleutherAI_pythia410m`
         for `pythia410m`.
         """
+        workflows: dict[str, set[str]] = {}
+        for module, workflow in self.requests:
+            workflows.setdefault(module, set()).add(workflow)
 
-        def name(feature: str, variant: Variant, full: bool) -> str:
+        def name(feature: str, variant: Variant, workflow: str, full: bool) -> str:
             parts = [
                 (label.full if full and label.full else label.value) for label in variant.labels
             ]
+            if len(workflows[variant.module]) > 1:
+                parts.append(workflow)
             return feature + "".join(f"_{part}" for part in parts)
 
-        pairs = [
-            (feature, variant)
-            for module in self.requested
-            for variant in self.variants[module]
-            for feature in registry[module].features
+        triples = [
+            (feature, variant, request[1])
+            for request in self.requests
+            for variant in self.selected[request]
+            for feature in registry[request[0]].features
         ]
-        short = [name(feature, variant, False) for feature, variant in pairs]
+        short = [name(*triple, False) for triple in triples]
         clashing = {n for n in short if short.count(n) > 1}
         return tuple(
-            Column(name(feature, variant, n in clashing), feature, variant)
-            for (feature, variant), n in zip(pairs, short, strict=True)
+            Column(name(*triple, n in clashing), triple[0], triple[1], triple[2])
+            for triple, n in zip(triples, short, strict=True)
         )
 
 
@@ -490,6 +538,11 @@ class Definitions:
 
         `modules` names the feature modules whose columns are requested. When
         it is `None`, every feature module the workflow selects is requested.
+        A module may name the workflow to use for it after `:`, as in
+        `pcfg:sm1`; that module and everything it needs are then resolved
+        under that workflow instead of `workflow_id`. A module may be
+        requested under several workflows, and its columns then end with the
+        workflow ID.
 
         Variants of one module are ordered with upstream variants varying
         slowest, then the workflow's config IDs, then each sweep in the order
@@ -500,6 +553,57 @@ class Definitions:
                 select a config for a needed module, a module expands to more
                 than `max_variants` variants, or two columns would share a name.
         """
+        requests = (
+            None
+            if modules is None
+            else list(dict.fromkeys(parse_request(text, workflow_id) for text in modules))
+        )
+        groups: dict[str, list[str] | None] = {workflow_id: None}
+        if requests is not None:
+            groups = {}
+            for module, workflow in requests:
+                groups.setdefault(workflow, []).append(module)
+        problems: list[Problem] = []
+        selected: dict[tuple[str, str], tuple[Variant, ...]] = {}
+        merged: dict[str, dict[str, Variant]] = {}
+        for workflow, names in groups.items():
+            try:
+                requested, variants = self._expand_one(workflow, names, max_variants)
+            except DefinitionError as error:
+                problems.extend(error.problems)
+                continue
+            if requests is None:
+                requests = [(name, workflow) for name in requested]
+            for name in requested:
+                selected[(name, workflow)] = variants[name]
+            for name, found in variants.items():
+                for variant in found:
+                    merged.setdefault(name, {}).setdefault(variant.digest, variant)
+        if problems:
+            raise DefinitionError(problems)
+
+        expansion = Expansion(
+            workflow_id,
+            tuple(requests),
+            selected,
+            {name: tuple(found.values()) for name, found in merged.items()},
+        )
+        location = f"workflow {workflow_id}"
+        names = [column.name for column in expansion.columns(self.registry)]
+        repeated = sorted({name for name in names if names.count(name) > 1})
+        if repeated:
+            raise DefinitionError(
+                [
+                    Problem(location, f"two variants produce column {name!r}; give distinct labels")
+                    for name in repeated
+                ]
+            )
+        return expansion
+
+    def _expand_one(
+        self, workflow_id: str, modules: Sequence[str] | None, max_variants: int
+    ) -> tuple[list[str], dict[str, tuple[Variant, ...]]]:
+        """Expand plain module names under one workflow: the requested modules and all variants."""
         selected = self.workflow(workflow_id)
         location = f"workflow {workflow_id}"
         if modules is None:
@@ -608,17 +712,7 @@ class Definitions:
         if problems:
             raise DefinitionError(problems)
 
-        expansion = Expansion(workflow_id, tuple(requested), variants)
-        names = [column.name for column in expansion.columns(self.registry)]
-        repeated = sorted({name for name in names if names.count(name) > 1})
-        if repeated:
-            raise DefinitionError(
-                [
-                    Problem(location, f"two variants produce column {name!r}; give distinct labels")
-                    for name in repeated
-                ]
-            )
-        return expansion
+        return requested, variants
 
     # Validation
 

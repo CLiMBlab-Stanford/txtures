@@ -244,6 +244,7 @@ class Parser:
                 sentence[kept],
                 words,
                 last,
+                bounded[kept],
             )
             threshold = _kth_per_sentence(new.sentence, new.score, self.beam)
             violators = [s for s, bound in pruned_best.items() if bound > threshold.get(s, NEG)]
@@ -290,14 +291,29 @@ class Parser:
         return out
 
     def _word(
-        self, beams, entry, store, size, store_id, score, sentence, words, last, chunk=1 << 25
+        self,
+        beams,
+        entry,
+        store,
+        size,
+        store_id,
+        score,
+        sentence,
+        words,
+        last,
+        bound=None,
+        chunk=1 << 25,
     ):
         """Stage 2: preterminal, fork, and join for every stage-1 survivor, in chunks.
 
         Each chunk's candidates are folded into a running beam per sentence,
         keyed by (sentence, store, preterminal, fork, join) and kept by best
-        score. Dropping states below a sentence's current `beam`-th score is
-        exact, since that score only rises as chunks are added.
+        score. Once a sentence's running beam is full, its `beam`-th score is
+        a floor: survivors whose upper bound `bound` does not exceed it are
+        skipped, and candidates that do not exceed it are dropped before
+        folding. This is exact, since the floor only rises and a state at or
+        below it cannot enter the beam. A sentence's first chunk holds its
+        `beam` best survivors, so the floor is set early.
         """
         dev = self.device
         rows = torch.arange(len(entry), device=dev)
@@ -310,23 +326,36 @@ class Parser:
             if len(tags) == 0:
                 continue
             mine = rows[sentence == s]
+            if bound is not None:
+                mine = mine[torch.argsort(bound[mine], descending=True, stable=True)]
             step = max(1, chunk // len(tags))
-            for begin in range(0, len(mine), step):
-                part = mine[begin : begin + step]
+            floor, begin = NEG, 0
+            while begin < len(mine):
+                size_ = min(step, self.beam) if begin == 0 and bound is not None else step
+                part = mine[begin : begin + size_]
+                begin += size_
+                if floor > NEG:
+                    part = part[bound[part] > floor]
+                    if len(part) == 0:
+                        break
                 found = self._candidates(
-                    part, tags, pw, size, brink, anc0, top_apex, score, bool(last[s])
+                    part, tags, pw, size, brink, anc0, top_apex, score, bool(last[s]), floor
                 )
                 if found is None:
                     continue
                 e, tag, fork, join, total = found
                 candidate = (sentence[e], store_id[e], tag, fork, join, total, e)
                 running = _fold(running, candidate, self.beam, self.n)
+                if bound is not None and begin < len(mine):
+                    totals = running[5][running[0] == s]
+                    if len(totals) >= self.beam:
+                        floor = float(totals.min())
         if running is None:
             return _empty(self.slots, dev)
         sent, sid, tag, fork, join, total, e = running
         return Beams(sent, tag, fork, join, store[e], size[e], total, entry[e])
 
-    def _candidates(self, part, tags, pw, size, brink, anc0, top_apex, score, last):
+    def _candidates(self, part, tags, pw, size, brink, anc0, top_apex, score, last, floor=NEG):
         """Scores of every (survivor, preterminal, fork, join) for one sentence's chunk.
 
         Only candidates with a nonzero probability are built: with fork 0 the
@@ -373,16 +402,18 @@ class Parser:
                 allowed = final_size == 0 if last else final_size > 0
                 prob = weight * j / safe
                 good = j_ok & allowed & (total_j > 0) & (prob > 0)
+                total = score[part[rows]] + torch.log(prob)
+                if floor > NEG:
+                    good &= total > floor
                 g = torch.nonzero(good).squeeze(1)
                 if len(g):
-                    e = part[rows[g]]
                     found.append(
                         (
-                            e,
+                            part[rows[g]],
                             tag[g],
                             torch.full_like(g, fork),
                             torch.full_like(g, join),
-                            score[e] + torch.log(prob[g]),
+                            total[g],
                         )
                     )
         if not found:

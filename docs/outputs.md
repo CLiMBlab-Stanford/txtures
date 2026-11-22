@@ -48,7 +48,8 @@ table$surprisal <- as.numeric(table$surprisal)
 
 `NAME.columns.tsv` lists each feature column with its module, feature,
 labels such as `lm_scores.model=gpt2`, and variant identity. `manifest.json`
-records the table's identity, the request, the full resolved config and
+records the table's identity, the request, the workflow behind each column,
+the full resolved config and
 resources of every variant, notes from planning, and the txtures version.
 Use these files, not column names, to find the parameters behind a column.
 

@@ -65,7 +65,9 @@ table = tx.run("gardenpath", workflow="pythia", modules=["surprisal"])
 `tx.run(name, workflow="main", modules=None)` is
 `txtures run NAME --workflow WORKFLOW --module ...`. It computes what is
 missing, writes the output table to the outputs directory unless it is
-current, and returns the table as read by `tx.read_table`.
+current, and returns the table as read by `tx.read_table`. A module can
+name its own workflow, as in `modules=["surprisal", "surprisal:pythia"]`
+(see [Definitions](definitions.md#workflows)).
 
 ## `tx.read_table`
 

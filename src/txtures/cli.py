@@ -202,9 +202,11 @@ def build_parser() -> argparse.ArgumentParser:
             "-m",
             "--module",
             dest="modules",
-            action="append",
+            action="extend",
+            nargs="+",
             metavar="MODULE",
-            help="feature module to include; repeat for several (default: all in the workflow)",
+            help="feature modules to include, each optionally as MODULE:WORKFLOW to use "
+            "another workflow for it (default: all in the workflow)",
         )
         if command == "plan":
             sub.add_argument("--json", action="store_true", help="print JSON")

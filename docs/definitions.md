@@ -59,9 +59,23 @@ The workflow alone decides which config each module uses. Configs never name
 other configs, so here `surprisal` keeps its `main` config and reads the
 `lm_scores` results computed under `pythia410m`.
 
-`txtures run NAME --workflow ID` uses a workflow. `--module` (`-m`), which
-can be repeated, limits the table to some feature modules; modules they
-depend on still run but add no columns.
+`txtures run NAME --workflow ID` uses a workflow. `--module` (`-m`) limits
+the table to some feature modules; modules they depend on still run but add
+no columns. It takes several names, and it can be repeated.
+
+The workflow given with `--workflow` is a default. A module can name its own
+workflow after `:`, and that module and every module it depends on are
+then resolved under that workflow. A module can be requested under several
+workflows:
+
+```sh
+txtures run NAME -m word_length surprisal surprisal:pythia
+```
+
+Here `word_length` and the first `surprisal` use `main`, and the second
+`surprisal` uses `pythia`, so the table has GPT-2 and Pythia surprisal side
+by side. Work that two workflows share, such as an upstream module with
+the same config in both, is computed once.
 
 ## Sweeps
 
@@ -112,6 +126,10 @@ lineage, upstream first, joined with `_`. Two kinds of label enter it:
 ```text
 document_id  region_index  text  char_start  char_end  surprisal_gpt2  surprisal_pythia70m
 ```
+
+A module requested under more than one workflow also adds the workflow ID
+at the end, as in `surprisal_gpt2_main` and `surprisal_pythia410m_pythia`.
+A module requested under one workflow adds none, whichever workflow it is.
 
 A sweep with one value adds no label of its own. A config listed in a
 workflow whose ID is already the model's label adds the model label once.

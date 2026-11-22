@@ -427,7 +427,9 @@ def merge(corpus: Corpus, state: State, pairs: dict, weights: dict) -> State:
         for s, t in enumerate(target):
             sums[c, s, t] = 1.0
             members = [m for m, x in enumerate(target) if x == t]
-            averages[c, t, s] = 1.0 if len(members) == 1 else w[s] / w[members].sum()
+            total = w[members].sum()
+            # Substates that lost all their mass merge with equal shares.
+            averages[c, t, s] = w[s] / total if total > 0 else 1.0 / len(members)
     sums_t = torch.as_tensor(sums, device=device)
     averages_t = torch.as_tensor(averages, device=device)
     binary = torch.einsum(

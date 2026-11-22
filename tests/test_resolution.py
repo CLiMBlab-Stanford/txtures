@@ -354,3 +354,49 @@ def test_registry_rejects_inconsistent_modules():
 
     with pytest.raises(ValueError, match="must list 'model' first"):
         Registry([Bad])
+
+
+# Per-module workflows
+
+
+def test_modules_can_name_their_own_workflow(store):
+    write(store / "configs" / "lm_scores" / "p.yml", "model: pythia\n")
+    write(store / "workflows" / "w1.yml", "lm_scores: p\n")
+    write(store / "workflows" / "w2.yml", "extends: w1\n")
+    definitions = Definitions.load(store)
+    modules = ["word_length", "surprisal", "surprisal:w1", "surprisal:w2"]
+    expansion = definitions.expand("main", modules)
+    assert expansion.requested == tuple(modules)
+    columns = expansion.columns()
+    assert [column.name for column in columns] == [
+        "word_length",
+        "surprisal_gpt2_main",
+        "surprisal_pythia_w1",
+        "surprisal_pythia_w2",
+    ]
+    assert [column.workflow for column in columns] == ["main", "main", "w1", "w2"]
+    # w1 and w2 resolve to the same computation, which is planned once.
+    assert columns[2].variant.digest == columns[3].variant.digest
+    assert len(expansion.variants["lm_scores"]) == 2
+    assert len(expansion.variants["surprisal"]) == 2
+
+
+def test_module_under_one_other_workflow_has_no_workflow_suffix(store):
+    write(store / "configs" / "lm_scores" / "p.yml", "model: pythia\n")
+    write(store / "workflows" / "w1.yml", "lm_scores: p\n")
+    definitions = Definitions.load(store)
+    names = column_names(definitions, modules=["word_length", "surprisal:w1"])
+    assert names == ["word_length", "surprisal_pythia"]
+    # Naming the default workflow explicitly is the same request as naming none.
+    assert column_names(definitions, modules=["surprisal", "surprisal:main"]) == ["surprisal_gpt2"]
+
+
+def test_module_workflow_errors(store):
+    definitions = Definitions.packaged()
+    with pytest.raises(DefinitionError) as error:
+        definitions.expand("main", ["surprisal:nope"])
+    assert "no workflow named 'nope'" in problems(error)
+    for bad in ["surprisal:", "surprisal:a:b", "surprisal:bad id", ":w1"]:
+        with pytest.raises(DefinitionError) as error:
+            definitions.expand("main", [bad])
+        assert "malformed module request" in problems(error)
