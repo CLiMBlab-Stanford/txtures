@@ -30,8 +30,9 @@ from txtures.engine import (
 from txtures.engine import slurm as slurm_jobs
 from txtures.engine.execution import build_resource
 from txtures.engine.planning import from_record, plan_resource
+from txtures.engine.tables import EXPORT_FORMATS, export_format, export_table
 from txtures.errors import Problem, SettingsError, TxturesError
-from txtures.inputs import InputReport, load_input, read_input, scan_inputs
+from txtures.inputs import InputReport, link_input, load_input, read_input, scan_inputs
 from txtures.settings import (
     LOCATION_KEYS,
     SITE_DOCUMENT,
@@ -186,16 +187,21 @@ def build_parser() -> argparse.ArgumentParser:
     for command, help_text, handler in (
         ("plan", "show what a request needs and what is missing", plan_command),
         ("run", "compute a request and write its output table", run_command),
+        ("get", "write a request's output table to a file or stdout", get_command),
     ):
         sub = commands.add_parser(command, help=help_text)
-        if command == "plan":
-            sub.add_argument("name", help="input basename")
+        if command in ("plan", "get"):
+            sub.add_argument(
+                "name", metavar="INPUT", help="input basename, input file path, or NAME=PATH"
+            )
         else:
             sub.add_argument(
                 "names",
                 nargs="+",
-                metavar="NAME",
-                help="input basename; several share one Slurm job array",
+                metavar="INPUT",
+                help="input basename, or a .txt, .tsv, or .csv file as PATH or NAME=PATH, "
+                "which is linked into the inputs directory; several inputs share one "
+                "Slurm job array",
             )
         sub.add_argument("-w", "--workflow", default="main", help="workflow ID (default: main)")
         sub.add_argument(
@@ -211,6 +217,25 @@ def build_parser() -> argparse.ArgumentParser:
         if command == "plan":
             sub.add_argument("--json", action="store_true", help="print JSON")
         else:
+            if command == "get":
+                sub.add_argument(
+                    "-o",
+                    "--output",
+                    type=Path,
+                    metavar="PATH",
+                    help="file to write (default: stdout)",
+                )
+                sub.add_argument(
+                    "--format",
+                    choices=EXPORT_FORMATS,
+                    help="output format (default: from the extension of PATH, else tsv)",
+                )
+                sub.add_argument(
+                    "--run",
+                    action="store_true",
+                    help="compute the table first if it is not current, as `txtures run` "
+                    "does, waiting for any Slurm job",
+                )
             sub.add_argument(
                 "--local",
                 action="store_true",
@@ -842,7 +867,8 @@ def _stores(settings: Settings) -> tuple[EntryStore, EntryStore]:
 def _plan(args: argparse.Namespace):
     settings = _settings(args)
     definitions = api.load_definitions(settings)
-    plan = plan_request(settings, definitions, args.name, args.workflow, args.modules)
+    name = link_input(settings.inputs, args.name)
+    plan = plan_request(settings, definitions, name, args.workflow, args.modules)
     return settings, plan
 
 
@@ -926,6 +952,47 @@ def _progress(message: str) -> None:
     print(message, file=sys.stderr, flush=True)
 
 
+def get_command(args: argparse.Namespace) -> int:
+    """Write a request's output table in the requested format to a file or stdout.
+
+    Without `--run`, the table must be current. With it, a table that is not
+    current is computed first, here or by a Slurm job that is waited for.
+    """
+    format = export_format(args.format, args.output)
+    settings, plan = _plan(args)
+    current = table_is_current(plan)
+    if current or not args.run:  # otherwise `api.run` reports them
+        for note in plan.notes:
+            print(f"note: {note}", file=sys.stderr)
+    if not current:
+        if not args.run:
+            raise TxturesError(
+                f"the table of {plan.corpus.name} for this request is not current; "
+                "compute it with `txtures run` and the same arguments, or add --run"
+            )
+        if args.workers is not None and (args.local or settings.executor == "local"):
+            raise TxturesError("--nworkers applies only to Slurm execution")
+        api.run(
+            plan.corpus.name,
+            args.workflow,
+            args.modules,
+            **{key: getattr(args, key) for key in PATH_FLAGS},
+            local=args.local,
+            nworkers=args.workers,
+            slurm={
+                key: getattr(args, key)
+                for key in slurm_jobs.SIZE_FIELDS
+                if getattr(args, key, None) is not None
+            }
+            or None,
+            progress=_progress,
+        )
+    export_table(plan.table_directory, format, args.output)
+    if args.output is not None:
+        print(f"wrote {args.output}", file=sys.stderr)
+    return 0
+
+
 def run_command(args: argparse.Namespace) -> int:
     """Compute requests and write their output tables, here or as one Slurm job.
 
@@ -938,7 +1005,7 @@ def run_command(args: argparse.Namespace) -> int:
         raise TxturesError("--nworkers applies only to Slurm execution")
     override = _size(args)
     definitions = api.load_definitions(settings)
-    names = list(dict.fromkeys(args.names))
+    names = list(dict.fromkeys(link_input(settings.inputs, name) for name in args.names))
     plans = [
         plan_request(settings, definitions, name, args.workflow, args.modules) for name in names
     ]

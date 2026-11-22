@@ -367,6 +367,51 @@ def fake_engine(monkeypatch, tmp_path):
     fake_modules.reset()
 
 
+def test_run_links_an_input_file_from_elsewhere(capsys, fake_engine):
+    source = fake_engine / "elsewhere" / "fresh.csv"
+    write(source, 'text\n"One, two."\nThree.\n')
+    named = fake_engine / "elsewhere" / "any name.tsv"
+    write(named, "text\nFour.\n")
+    assert main(["run", str(source), f"other={named}"]) == 0
+    capsys.readouterr()
+    assert (fake_engine / "inputs" / "fresh.csv").resolve() == source.resolve()
+    assert (fake_engine / "inputs" / "other.tsv").resolve() == named.resolve()
+    assert main(["run", str(source)]) == 0
+    assert "is already current" in capsys.readouterr().out
+    assert main(["plan", f"doc={named}"]) == 1
+    assert "'doc' is already used" in capsys.readouterr().err
+
+
+def test_get_writes_a_current_table_in_each_format(capsys, fake_engine, tmp_path):
+    assert main(["get", "doc"]) == 1
+    assert "not current" in capsys.readouterr().err
+    assert main(["get", "doc", "--run"]) == 0
+    out = capsys.readouterr().out
+    assert main(["plan", "doc", "--json"]) == 0
+    table = Path(json.loads(capsys.readouterr().out)["table"])
+    assert out == (table / "doc.tsv").read_text(encoding="utf-8")
+
+    assert main(["get", "doc", "-o", str(tmp_path / "doc.csv")]) == 0
+    tsv_rows = [line.split("\t") for line in out.splitlines()]
+    import csv
+
+    with (tmp_path / "doc.csv").open(newline="", encoding="utf-8") as handle:
+        assert list(csv.reader(handle)) == tsv_rows
+
+    assert main(["get", "doc", "--format", "json"]) == 0
+    records = json.loads(capsys.readouterr().out)
+    assert len(records) == len(tsv_rows) - 1
+    assert list(records[0]) == tsv_rows[0]
+
+    assert main(["get", "doc", "--format", "parquet"]) == 1
+    assert "needs a file" in capsys.readouterr().err
+    pytest.importorskip("pyarrow")
+    assert main(["get", "doc", "-o", str(tmp_path / "doc.parquet")]) == 0
+    import pandas as pd
+
+    assert list(pd.read_parquet(tmp_path / "doc.parquet").columns) == tsv_rows[0]
+
+
 def test_plan_run_status_and_gc(capsys, fake_engine):
     assert main(["plan", "doc", "--json"]) == 0
     plan = json.loads(capsys.readouterr().out)

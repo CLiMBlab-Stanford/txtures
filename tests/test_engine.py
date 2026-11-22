@@ -403,3 +403,32 @@ def test_format_value(value, text):
 def test_format_value_rejects_tabs():
     with pytest.raises(TxturesError, match="tab or line break"):
         format_value("a\tb")
+
+
+def test_export_keeps_missing_and_infinite_values(tmp_path, capsys):
+    import csv
+    import json
+
+    from txtures.engine.tables import export_table
+
+    table = tmp_path / "t"
+    table.mkdir()
+    (table / "t.tsv").write_text(
+        "document_id\tregion_index\ttext\tchar_start\tchar_end\tsurprisal_gpt2\n"
+        '1\t1\tNA\t0\t2\t1.25\n1\t2\t"x"\t3\t6\tNA\n1\t3\ty,z\t7\t10\tInf\n',
+        encoding="utf-8",
+    )
+    (table / "t.columns.tsv").write_text(
+        "column\tmodule\tfeature\tlabels\tvariant\nsurprisal_gpt2\tlm\tsurprisal\t\tv\n",
+        encoding="utf-8",
+    )
+    export_table(table, "json")
+    rows = json.loads(capsys.readouterr().out)
+    assert [r["surprisal_gpt2"] for r in rows] == [1.25, None, "Inf"]
+    assert [r["text"] for r in rows] == ["NA", '"x"', "y,z"]  # text stays text
+    assert rows[0]["region_index"] == 1
+    export_table(table, "csv", tmp_path / "t.csv")
+    with (tmp_path / "t.csv").open(newline="", encoding="utf-8") as handle:
+        values = list(csv.reader(handle))
+    assert [row[2] for row in values[1:]] == ["NA", '"x"', "y,z"]
+    assert [row[5] for row in values[1:]] == ["1.25", "NA", "Inf"]

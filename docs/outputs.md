@@ -53,6 +53,34 @@ the full resolved config and
 resources of every variant, notes from planning, and the txtures version.
 Use these files, not column names, to find the parameters behind a column.
 
+## Getting a table
+
+`txtures get` writes a request's table to a file or to stdout, in the format
+you ask for. It takes the same input, `-w`, and `-m` arguments as
+`txtures run`, so it finds the table that `run` with those arguments writes.
+
+```bash
+txtures get stories -m surprisal | head            # TSV on stdout
+txtures get stories -m surprisal -o stories.csv    # format from the extension
+txtures get stories --format json > stories.json
+txtures get stories -o stories.parquet --run       # compute it first if needed
+```
+
+The formats are `tsv`, `csv`, `json`, and `parquet`. Without `--format`,
+the extension of the `-o` file decides, and stdout gets TSV. TSV is the
+table's own file, copied byte for byte. CSV holds the same text values,
+quoted where CSV needs it. JSON is a list with one object per row, with
+`null` for missing values and the strings `"Inf"` and `"-Inf"` for
+infinities, which JSON cannot represent. Parquet keeps the column types of
+`txtures.read_table` and needs a file.
+
+Without `--run`, `get` only reads: if the table is not current, it says so
+and writes nothing. With `--run`, it computes the table first as
+`txtures run` would, waiting for any Slurm job it submits, and accepts
+`run`'s `--local`, `--nworkers`, and job-size options. The table directory
+stays the only stored copy; `get` never writes into the outputs directory
+except through `--run`.
+
 ## What is current
 
 txtures decides what to compute from identities, never from modification

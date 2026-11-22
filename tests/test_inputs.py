@@ -496,3 +496,74 @@ def test_document_digest_includes_only_the_levels_a_document_defines(inputs):
         {"text": "x y z", "regions": [[0, 1], [2, 3], [4, 5]], "sentences": [[0, 2], [2, 3]]}
     )
     assert b.digest != a.digest
+
+
+# CSV
+
+
+def test_csv_reads_like_tsv_with_quoted_fields(inputs):
+    write(
+        inputs / "c.csv",
+        'document_id,text,condition\na,"She said ""hi, there"".",x\nb,"Two\nlines.",y\n',
+    )
+    result = corpus(inputs, "c")
+    assert result.layout == DOCUMENT_PER_ROW
+    assert result.metadata_columns == ("condition",)
+    first, second = result.documents
+    assert first.text == 'She said "hi, there".'
+    assert regions(second) == ["Two", "lines."]
+
+
+def test_csv_and_tsv_of_the_same_table_read_alike(inputs):
+    write(inputs / "a.tsv", tsv("sentence_id\ttext", "2\tSecond one.", "1\tFirst one."))
+    write(inputs / "b.csv", "sentence_id,text\n2,Second one.\n1,First one.\n")
+    a, b = corpus(inputs, "a"), corpus(inputs, "b")
+    assert [d.text for d in a.documents] == [d.text for d in b.documents]
+    assert a.layout == b.layout
+
+
+def test_csv_problems_report_the_first_line_of_the_row(inputs):
+    write(inputs / "c.csv", 'text,condition\n"a\nb",x\nonly\n')
+    assert "c.csv:4: has 1 fields; the header has 2" in problems(inputs, "c")
+    write(inputs / "d.csv", 'text\n"unclosed\n')
+    assert "is not valid CSV" in problems(inputs, "d")
+
+
+# Linking files from elsewhere
+
+
+def test_link_input_by_path_and_by_name(inputs, tmp_path):
+    from txtures.inputs import link_input
+
+    elsewhere = tmp_path / "data"
+    write(elsewhere / "stories.csv", "text\nOnce upon a time.\n")
+    write(elsewhere / "my file (v2).txt", "One line.\n")
+    assert link_input(inputs, "plain") == "plain"  # an input name is unchanged
+    assert link_input(inputs, str(elsewhere / "stories.csv")) == "stories"
+    assert (inputs / "stories.csv").resolve() == (elsewhere / "stories.csv").resolve()
+    assert link_input(inputs, f"v2={elsewhere / 'my file (v2).txt'}") == "v2"
+    assert (inputs / "v2.txt").is_symlink()
+    assert corpus(inputs, "stories").documents[0].text == "Once upon a time."
+    # repeating a request reuses its link
+    assert link_input(inputs, str(elsewhere / "stories.csv")) == "stories"
+
+
+def test_link_input_errors(inputs, tmp_path):
+    from txtures.inputs import link_input
+
+    write(tmp_path / "taken.tsv", tsv("text", "x"))
+    write(inputs / "taken.txt", "already here\n")
+    write(tmp_path / "bad name!.txt", "x\n")
+    write(tmp_path / "notes.md", "x\n")
+    with pytest.raises(TxturesError, match="'taken' is already used by .*taken.txt"):
+        link_input(inputs, str(tmp_path / "taken.tsv"))
+    with pytest.raises(TxturesError, match="must match"):
+        link_input(inputs, str(tmp_path / "bad name!.txt"))
+    with pytest.raises(TxturesError, match="extension must be one of"):
+        link_input(inputs, f"n={tmp_path / 'notes.md'}")
+    with pytest.raises(TxturesError, match="does not exist"):
+        link_input(inputs, str(tmp_path / "missing.txt"))
+    write(tmp_path / "other" / "x.txt", "y\n")
+    link_input(inputs, f"x={tmp_path / 'taken.tsv'}")
+    with pytest.raises(TxturesError, match="'x' is already used"):
+        link_input(inputs, f"x={tmp_path / 'other' / 'x.txt'}")

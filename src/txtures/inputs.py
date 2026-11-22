@@ -9,15 +9,21 @@ An input is a file in the inputs directory, addressed by its basename:
   when two rows share every ID; otherwise each row is a unit of the innermost
   level with an ID column, or a document when there is none.
 
+- `NAME.csv`: the same columns and rules as a TSV file, comma-separated.
+
 An optional `NAME.json` sidecar sets delimiters and joiners. TSV files are
 read strictly: tab-separated, UTF-8, first line a header, and no quote
 processing, so quote characters in text are kept as written. Fields therefore
-cannot contain tabs or line breaks.
+cannot contain tabs or line breaks. CSV files are UTF-8 with a header line
+and standard quoting: a field in double quotes may contain commas, line
+breaks, and doubled double quotes (`""` for `"`).
 """
 
 from __future__ import annotations
 
+import csv
 import hashlib
+import io
 import json
 import re
 import unicodedata
@@ -45,7 +51,7 @@ NAME_PATTERN = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.-]*")
 READER_VERSION = 2
 """Version of the reading rules. Increment it when the same file would read differently."""
 
-INPUT_SUFFIXES = (".tsv", ".txt")
+INPUT_SUFFIXES = (".tsv", ".csv", ".txt")
 SIDECAR_SUFFIX = ".json"
 
 DOCUMENT_PER_ROW = "document-per-row"
@@ -152,6 +158,56 @@ def scan_inputs(root: Path) -> Inventory:
     inventory.ignored.extend(sidecars.values())
     inventory.ignored.sort()
     return inventory
+
+
+def link_input(root: Path, request: str) -> str:
+    """The input name a request names, linking an outside file into `root` if it names one.
+
+    - `NAME` is an input already in `root` and is returned unchanged.
+    - `NAME=PATH` links the file `PATH` as `NAME.EXT`, where `EXT` is the
+      file's own extension.
+    - `PATH` (anything containing `/`, or ending in an input extension)
+      links the file as its own basename, so its stem becomes the name.
+
+    The file must have an input extension and the name must match
+    `NAME_PATTERN`. The link points at the file's absolute path. A name
+    already used by another input in `root` is an error, unless it is a link
+    to the same file from an earlier call, which is reused.
+
+    Raises:
+        TxturesError: The file or name is invalid, or the name is taken.
+    """
+    name, separator, path = request.partition("=")
+    if not (separator and NAME_PATTERN.fullmatch(name)):
+        if "/" not in request and Path(request).suffix not in INPUT_SUFFIXES:
+            return request
+        name, path = None, request
+    source = Path(path).expanduser().absolute()
+    if source.suffix not in INPUT_SUFFIXES:
+        listed = ", ".join(INPUT_SUFFIXES)
+        raise TxturesError(f"{path} is not an input file: its extension must be one of {listed}")
+    if not source.is_file():
+        raise TxturesError(f"input file {path} does not exist")
+    if name is None:
+        name = source.stem
+    if not NAME_PATTERN.fullmatch(name):
+        raise TxturesError(
+            f"input name {name!r} (from {request}) must match {NAME_PATTERN.pattern}; "
+            "give another name as NAME=PATH"
+        )
+    root.mkdir(parents=True, exist_ok=True)
+    target = root / f"{name}{source.suffix}"
+    for suffix in INPUT_SUFFIXES:
+        existing = root / f"{name}{suffix}"
+        if not (existing.exists() or existing.is_symlink()):
+            continue
+        if existing == target and existing.is_symlink() and existing.resolve() == source.resolve():
+            return name
+        raise TxturesError(
+            f"input name {name!r} is already used by {existing}; give another name as NAME=PATH"
+        )
+    target.symlink_to(source)
+    return name
 
 
 # Reading
@@ -386,18 +442,49 @@ def _read_plain_text(path: Path, settings: InputSettings, report: _Report):
     return PLAIN_TEXT, documents, ()
 
 
-def _rows(path: Path, lines: list[str], report: _Report) -> Iterator[tuple[int, dict[str, str]]]:
-    """Yield `(line number, row)` for each data line, checking field counts."""
-    header = lines[0].split("\t")
-    for number, line in enumerate(lines[1:], start=2):
-        values = line.split("\t")
+Records = list[tuple[int, list[str]]]
+"""A table's header and rows as `(first line number, fields)`, header first."""
+
+
+def _tsv_records(lines: list[str]) -> Records:
+    return [(number, line.split("\t")) for number, line in enumerate(lines, start=1)]
+
+
+def _csv_records(path: Path, report: _Report) -> Records | None:
+    """Parse a CSV file with standard quoting; a quoted field may span lines."""
+    try:
+        text = path.read_text(encoding="utf-8-sig")
+    except UnicodeDecodeError as error:
+        report.error(str(path), f"is not valid UTF-8: {error}")
+        return None
+    except OSError as error:
+        report.error(str(path), f"cannot be read: {error}")
+        return None
+    reader = csv.reader(io.StringIO(text, newline=""), strict=True)
+    records: Records = []
+    start = 1
+    try:
+        for fields in reader:
+            records.append((start, fields))
+            start = reader.line_num + 1
+    except csv.Error as error:
+        report.error(f"{path}:{start}", f"is not valid CSV: {error}")
+        return None
+    return records
+
+
+def _rows(path: Path, records: Records, report: _Report) -> Iterator[tuple[int, dict[str, str]]]:
+    """Yield `(line number, row)` for each data row, checking field counts."""
+    header = records[0][1]
+    tsv = path.suffix == ".tsv"
+    for number, values in records[1:]:
         if len(values) != len(header):
             report.error(
                 f"{path}:{number}", f"has {len(values)} fields; the header has {len(header)}"
             )
             continue
         for column, value in zip(header, values, strict=True):
-            if len(value) > 1 and value.startswith('"') and value.endswith('"'):
+            if tsv and len(value) > 1 and value.startswith('"') and value.endswith('"'):
                 report.warn(
                     f"{path}:{number}",
                     f"{column} is wrapped in double quotes, which are kept as text; "
@@ -466,14 +553,14 @@ def _describe(row: _Row, levels: Sequence[str]) -> str:
     return ", ".join(parts)
 
 
-def _parse_rows(path, lines, levels, metadata_columns, report) -> list[_Row]:
+def _parse_rows(path, records, levels, metadata_columns, report) -> list[_Row]:
     """Read each data row's IDs, text, and metadata, dropping rows with invalid IDs.
 
     Without any ID column, each row is its own document, numbered from 1.
     With ID columns but no `document_id`, the file is one document, `1`.
     """
     rows = []
-    for number, row in _rows(path, lines, report):
+    for number, row in _rows(path, records, report):
         location = f"{path}:{number}"
         ids: dict[str, str] = {}
         for level in levels:
@@ -539,11 +626,11 @@ def _check_order(path, rows: Sequence[_Row], levels, has_region_ids, report) -> 
     return kept
 
 
-def _read_table(path, lines, settings, report):
-    header = lines[0].split("\t")
+def _read_table(path, records, settings, report):
+    header = records[0][1]
     levels = [level for level in LEVELS if f"{level}_id" in header]
     metadata_columns = _metadata_columns(path, header, report)
-    rows = _parse_rows(path, lines, levels, metadata_columns, report)
+    rows = _parse_rows(path, records, levels, metadata_columns, report)
     row_level = _row_level(rows, levels)
     if row_level == "region":
         for key in ("region_delimiter", "sentence_delimiter"):
@@ -596,12 +683,16 @@ def read_input(entry: InputFile) -> InputReport:
     if entry.path.suffix == ".txt":
         result = _read_plain_text(entry.path, settings, report)
     else:
-        lines = _read_lines(entry.path, report)
-        if lines is not None:
-            if not lines:
+        if entry.path.suffix == ".csv":
+            records = _csv_records(entry.path, report)
+        else:
+            lines = _read_lines(entry.path, report)
+            records = None if lines is None else _tsv_records(lines)
+        if records is not None:
+            if not records:
                 report.error(str(entry.path), "is empty; the first line must be a header")
-            elif _check_header(entry.path, lines[0].split("\t"), report):
-                result = _read_table(entry.path, lines, settings, report)
+            elif _check_header(entry.path, records[0][1], report):
+                result = _read_table(entry.path, records, settings, report)
 
     if result is not None and not result[1] and not report.problems:
         report.error(str(entry.path), "contains no documents")

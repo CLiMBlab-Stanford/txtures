@@ -57,7 +57,10 @@ txtures run gardenpath
 ```
 
 This writes a table with one row per word and its surprisal under GPT-2 to
-the outputs directory. From Python:
+the outputs directory. A file elsewhere works too: `txtures run
+~/data/gardenpath.txt` links it into the inputs directory first.
+`txtures get gardenpath -o gardenpath.csv` writes the finished table as CSV
+(or TSV, JSON, or Parquet) wherever you want it. From Python:
 
 ```python
 import txtures as tx

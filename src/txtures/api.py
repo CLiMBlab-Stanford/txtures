@@ -41,7 +41,7 @@ from txtures.engine.tables import read_table, table_frame, table_is_current
 
 __all__ = ["compute", "read_table", "run"]
 from txtures.errors import DefinitionError, InputError, Problem, SettingsError, TxturesError
-from txtures.inputs import InputSettings, read_texts
+from txtures.inputs import InputSettings, link_input, read_texts
 from txtures.modules import REGISTRY, Workload
 from txtures.settings import Settings, resolve_settings, uses_default_locations
 from txtures.store import EntryStore, read_json
@@ -142,6 +142,9 @@ def run(
 ) -> pd.DataFrame:
     """Compute a request for the input `name` and return its output table.
 
+    `name` may also be a path to an input file, or `NAME=PATH`; the file is
+    linked into the inputs directory first (see `txtures run`).
+
     This is `txtures run NAME --workflow WORKFLOW --modules ...`: the table
     is written to the outputs directory, or reused if it is current, and
     then read with `read_table`. The location and `device` arguments
@@ -186,6 +189,7 @@ def run(
     )
     workers = _check_workers(resolved, local, nworkers, workers)
     override = slurm_jobs.size(slurm)
+    name = link_input(resolved.inputs, name)
     plan = plan_request(resolved, load_definitions(resolved), name, workflow, modules)
     _warn(plan.notes)
     if _submits(plan, resolved, local, progress):

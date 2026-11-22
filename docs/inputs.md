@@ -2,8 +2,10 @@
 
 An input is one file in the inputs directory, named by its basename:
 `stimuli.tsv` is the input `stimuli`. Names must match
-`[A-Za-z0-9_][A-Za-z0-9_.-]*`, and two files may not share one. txtures
-never writes to the inputs directory.
+`[A-Za-z0-9_][A-Za-z0-9_.-]*`, and two files may not share one. A file
+elsewhere can be used without copying it; see
+[Files outside the inputs directory](#files-outside-the-inputs-directory).
+txtures writes to the inputs directory only to add those links.
 
 Each input is divided into documents, and each document into regions.
 A document is one language-model context: scoring never crosses documents.
@@ -15,7 +17,7 @@ document, section, paragraph, sentence, region.
 
 **Plain text** (`NAME.txt`): one document per line, numbered from 1.
 
-**TSV** (`NAME.tsv`): a `text` column, plus optional ID columns
+**TSV** (`NAME.tsv`) and **CSV** (`NAME.csv`): a `text` column, plus optional ID columns
 `document_id`, `section_id`, `paragraph_id`, `sentence_id`, and `region_id`.
 Every other column is metadata. The ID columns decide what each row holds:
 
@@ -77,6 +79,37 @@ fields cannot contain tabs or line breaks. A field wrapped in double quotes
 draws a warning, because it usually means the file was written with quoting,
 as R's `write.table` does by default; write with `quote = FALSE`.
 
+CSV files have the same columns and rules, separated by commas, with
+standard CSV quoting: a field in double quotes may contain commas and line
+breaks, and `""` inside it stands for one `"`. They are UTF-8 with a header
+on the first line. Problems are reported at the line where the row starts.
+
+## Files outside the inputs directory
+
+`txtures run` and `txtures plan` also accept the path of an input file, or
+`NAME=PATH`:
+
+```bash
+txtures run ~/data/stories.csv          # the input stories
+txtures run pilot=~/data/"Pilot (v2).txt"   # the input pilot
+```
+
+txtures links the file into the inputs directory as `NAME.EXT`, keeping the
+file's extension (`stories.csv`, `pilot.txt`), and then runs that input as
+usual. With a bare path, the name is the file's basename without its
+extension, and it must be a valid input name; otherwise give one as
+`NAME=PATH`. An argument is read as a path when it contains `/` or ends in
+`.txt`, `.tsv`, or `.csv`, and as `NAME=PATH` when the part before the first
+`=` is a valid name.
+
+A name that another input already uses is refused. Running the same path
+again reuses its link, so later runs can name the input alone
+(`txtures run stories`). The link points at the file, so edits to the file
+change the input, and moving or deleting it breaks the input. On Slurm the
+file must be on a filesystem that the compute nodes can read. A sidecar is
+not linked; put `NAME.json` in the inputs directory if the input needs one.
+The Python function `txtures.run` accepts the same forms.
+
 ## Sidecar settings
 
 An optional `NAME.json` beside the input sets how text is divided and joined:
@@ -134,7 +167,7 @@ txtures inputs check NAME     # every problem in one input
 ```
 
 Every run reads its input the same way and refuses an invalid one. Problems
-include unreadable or non-UTF-8 files; a missing `text` column; a repeated
+include unreadable or non-UTF-8 files; malformed CSV quoting; a missing `text` column; a repeated
 or empty column name; rows with the wrong number of fields; metadata columns
 named like output columns (`region_index`, `char_start`, `char_end`);
 empty text or IDs, including blank lines in a `.txt` file; section,

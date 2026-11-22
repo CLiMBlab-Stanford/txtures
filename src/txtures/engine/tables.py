@@ -282,6 +282,89 @@ def read_table(path: Path | str) -> pd.DataFrame:
     return _typed(frame, features)
 
 
+EXPORT_FORMATS = ("tsv", "csv", "json", "parquet")
+"""Formats `export_table` writes."""
+
+
+def export_format(format: str | None, path: Path | None) -> str:
+    """The export format: `format`, else the extension of `path`, else `tsv`.
+
+    Raises:
+        TxturesError: The format is unknown, or Parquet was asked for stdout.
+    """
+    if format is None:
+        suffix = path.suffix.lstrip(".").lower() if path is not None else ""
+        format = suffix if suffix in EXPORT_FORMATS else "tsv"
+    if format not in EXPORT_FORMATS:
+        raise TxturesError(f"format must be one of {', '.join(EXPORT_FORMATS)}, not {format!r}")
+    if format == "parquet" and path is None:
+        raise TxturesError("parquet output needs a file; give one with -o PATH")
+    return format
+
+
+def export_table(directory: Path, format: str, path: Path | None = None) -> None:
+    """Write the output table in `directory` as `format` to `path`, or to stdout.
+
+    TSV is the table's own file, copied byte for byte. CSV holds the same
+    text values, quoted where CSV needs it. JSON is a list of one object per
+    row, with `null` for missing values and the strings `"Inf"` and `"-Inf"`
+    for infinities, which JSON cannot represent. Parquet keeps the column
+    types `read_table` gives.
+    """
+    import sys
+
+    (table,) = [p for p in directory.glob("*.tsv") if not p.name.endswith(COLUMNS_SUFFIX)]
+    if format == "tsv":
+        if path is None:
+            with table.open("rb") as handle:
+                shutil.copyfileobj(handle, sys.stdout.buffer)
+        else:
+            shutil.copyfile(table, path)
+        return
+    if format == "csv":
+        import csv
+
+        output = sys.stdout if path is None else path.open("w", encoding="utf-8", newline="")
+        try:
+            writer = csv.writer(output, lineterminator="\n")
+            with table.open(encoding="utf-8", newline="") as handle:
+                for line in handle:
+                    writer.writerow(line.removesuffix("\n").split("\t"))
+        finally:
+            if path is not None:
+                output.close()
+        return
+    frame = read_table(table)
+    if format == "parquet":
+        frame.to_parquet(path, index=False)
+        return
+    import json
+
+    import pandas as pd
+
+    def plain(value: Any) -> Any:
+        if value is None or value is pd.NA:
+            return None
+        if isinstance(value, float):
+            if math.isnan(value):
+                return None
+            if math.isinf(value):
+                return "Inf" if value > 0 else "-Inf"
+        if hasattr(value, "item"):
+            return plain(value.item())
+        return value
+
+    rows = [
+        {name: plain(value) for name, value in zip(frame.columns, row, strict=True)}
+        for row in frame.itertuples(index=False, name=None)
+    ]
+    text = json.dumps(rows, ensure_ascii=False, allow_nan=False) + "\n"
+    if path is None:
+        sys.stdout.write(text)
+    else:
+        path.write_text(text, encoding="utf-8")
+
+
 def _document_columns(document, column_variants, executor: Executor) -> list[Sequence[Any]]:
     """Return each requested feature column's values for one document."""
     by_variant: dict[str, Mapping[str, Any]] = {}
