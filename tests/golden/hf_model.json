@@ -1,0 +1,64 @@
+{
+ "target": "hf_model",
+ "values": {
+  "bos": {
+   "boundary": [
+    1,
+    0,
+    0,
+    1,
+    1,
+    0
+   ],
+   "document_start": "bos",
+   "properties": {
+    "boundaries_detected": true,
+    "boundary_tokens": 3,
+    "max_length": 16,
+    "start_ids": [
+     5
+    ],
+    "vocab_size": 6
+   }
+  },
+  "eos": {
+   "boundary": [
+    1,
+    0,
+    0,
+    1,
+    1
+   ],
+   "document_start": "eos",
+   "properties": {
+    "boundaries_detected": true,
+    "boundary_tokens": 3,
+    "max_length": 16,
+    "start_ids": [
+     0
+    ],
+    "vocab_size": 5
+   }
+  },
+  "no_bos": {
+   "boundary": [
+    1,
+    0,
+    0,
+    1,
+    1
+   ],
+   "document_start": "eos",
+   "properties": {
+    "boundaries_detected": true,
+    "boundary_tokens": 3,
+    "max_length": 16,
+    "start_ids": [
+     0
+    ],
+    "vocab_size": 5
+   }
+  }
+ },
+ "version": 1
+}

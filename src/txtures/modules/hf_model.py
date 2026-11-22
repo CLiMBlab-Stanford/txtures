@@ -8,8 +8,9 @@ context is marked, so that choice is part of the resource's identity.
 
 Building the resource records the tokenizer properties that scoring needs:
 the model's maximum context length and the boundary set *B*, the token IDs
-that begin a new word. Weights are kept in the Hugging Face cache, not in the
-resource store.
+that begin a new word. It also downloads the weights into the Hugging Face
+cache, which keeps them outside the resource store, so that a GPU job never
+waits for a download.
 """
 
 from __future__ import annotations
@@ -236,6 +237,55 @@ def device(name: str) -> str:
     return "cpu"
 
 
+def prefetch_weights(
+    resolved: Mapping[str, Any], cache: Path | None, token: str | None = None
+) -> None:
+    """Download a hub model's files at its resolved revision into the Hugging Face cache.
+
+    Safetensors weights are taken when the repository has them, and PyTorch
+    `.bin` weights otherwise, so a repository with both is not downloaded
+    twice. A local model directory needs nothing.
+
+    Raises:
+        TxturesError: The files cannot be downloaded.
+    """
+    if is_local(resolved["model"]):
+        return
+    from huggingface_hub import HfApi, constants, snapshot_download
+
+    def fetch() -> None:
+        files = HfApi().list_repo_files(
+            resolved["model"], revision=resolved["revision"], token=token
+        )
+        weights = "*.safetensors" if any(f.endswith(".safetensors") for f in files) else "*.bin"
+        snapshot_download(
+            resolved["model"],
+            revision=resolved["revision"],
+            cache_dir=cache,
+            token=token,
+            allow_patterns=[weights, "*.json", "*.model", "*.txt", "*.tiktoken"],
+        )
+
+    try:
+        try:
+            fetch()
+        except Exception as error:
+            # The hub refuses Xet read tokens to anonymous users for renamed
+            # repositories, such as `gpt2` (now `openai-community/gpt2`).
+            # Plain HTTP downloads of the same files still work.
+            if "xet-read-token" not in str(error) or constants.HF_HUB_DISABLE_XET:
+                raise
+            constants.HF_HUB_DISABLE_XET = True
+            try:
+                fetch()
+            finally:
+                constants.HF_HUB_DISABLE_XET = False
+    except Exception as error:
+        raise TxturesError(
+            f"cannot download the files of model {resolved['model']!r}: {error}"
+        ) from error
+
+
 @dataclass
 class LanguageModel:
     """A loaded `hf_model` resource, as modules receive it."""
@@ -290,6 +340,7 @@ class HFModel(Resource):
         import transformers
         from transformers import AutoConfig
 
+        prefetch_weights(resolved, context.hf_cache, context.hf_token)
         tokenizer = load_tokenizer(resolved, context.hf_cache, context.hf_token)
         try:
             config = AutoConfig.from_pretrained(

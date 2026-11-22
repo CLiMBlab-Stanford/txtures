@@ -1,0 +1,22 @@
+{
+ "target": "word_length",
+ "values": {
+  "accents": [
+   4,
+   2,
+   4
+  ],
+  "plain": [
+   3,
+   6,
+   2,
+   5
+  ],
+  "regions": [
+   8,
+   2,
+   4
+  ]
+ },
+ "version": 1
+}

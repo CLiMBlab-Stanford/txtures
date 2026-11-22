@@ -14,7 +14,7 @@ leave items missing.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Collection, Sequence
 from dataclasses import dataclass
 from typing import Any
 
@@ -35,8 +35,84 @@ class VariantCounts:
     reused: int = 0
 
 
+def load_resource(
+    store: EntryStore,
+    resource: PlannedResource,
+    context: RunContext,
+    loaded: dict[str, Any] | None = None,
+) -> Any:
+    """Load a built resource, and first its dependencies, passed to its `load`
+    as `dependencies` when it has any. `loaded` caches loaded resources by
+    identity.
+
+    Raises:
+        TxturesError: The resource or a dependency is not in the store.
+    """
+    loaded = {} if loaded is None else loaded
+    if resource.identity in loaded:
+        return loaded[resource.identity]
+    dependencies = {
+        name: load_resource(store, dependency, context, loaded)
+        for name, dependency in resource.dependencies.items()
+    }
+    directory = store.get(resource.kind, resource.identity)
+    if directory is None:
+        raise TxturesError(f"resource {resource.kind} {resource.identity} is missing")
+    if dependencies:
+        value = resource.resource.load(
+            resource.resolved, directory, context, dependencies=dependencies
+        )
+    else:
+        value = resource.resource.load(resource.resolved, directory, context)
+    loaded[resource.identity] = value
+    return value
+
+
+def build_resource(
+    store: EntryStore,
+    resource: PlannedResource,
+    context: RunContext,
+    progress: Callable[[str], None],
+) -> bool:
+    """Build `resource` into `store` unless it is there; return whether this call built it.
+
+    Missing dependencies are built first. The build holds the entry's lock,
+    so concurrent callers build it once.
+    """
+    for dependency in resource.dependencies.values():
+        build_resource(store, dependency, context, progress)
+    if store.get(resource.kind, resource.identity) is not None:
+        return False
+    with store.lock(resource.kind, resource.identity):
+        if store.get(resource.kind, resource.identity) is not None:
+            return False
+        progress(f"building resource {resource.kind} {resource.identity[:12]}")
+        loaded = {
+            name: load_resource(store, dependency, context)
+            for name, dependency in resource.dependencies.items()
+        }
+
+        def build(directory) -> None:
+            if loaded:
+                resource.resource.build(resource.resolved, directory, context, dependencies=loaded)
+            else:
+                resource.resource.build(resource.resolved, directory, context)
+
+        manifest = {"spec": dict(resource.resolved), "version": resource.resource.version}
+        if resource.dependencies:
+            manifest["dependencies"] = {n: d.identity for n, d in resource.dependencies.items()}
+        store.publish(resource.kind, resource.identity, build, manifest)
+    return True
+
+
 class Executor:
-    """Runs a plan against the item and resource stores on this machine."""
+    """Runs a plan against the item and resource stores on this machine.
+
+    `loaded` may be a dictionary shared by the executors of several plans,
+    so that a model loaded for one is reused by the next, and `keep` holds
+    the identities of resources a later plan needs, which are not released
+    when this plan is done with them.
+    """
 
     def __init__(
         self,
@@ -46,6 +122,8 @@ class Executor:
         context: RunContext,
         progress: Progress | None = None,
         shard: tuple[int, int] = (0, 1),
+        loaded: dict[str, Any] | None = None,
+        keep: Collection[str] = (),
     ):
         index, count = shard
         if not 0 <= index < count:
@@ -59,7 +137,8 @@ class Executor:
         self.counts: dict[str, VariantCounts] = {
             planned.identity: VariantCounts() for planned in plan.variants
         }
-        self._loaded: dict[str, Any] = {}
+        self._loaded: dict[str, Any] = {} if loaded is None else loaded
+        self._keep = frozenset(keep)
         self._memo: dict[tuple[str, str], Any] = {}
 
     # Resources
@@ -67,30 +146,10 @@ class Executor:
     def prepare_resources(self) -> None:
         """Build every resource the plan needs that the resource store lacks."""
         for resource in self.plan.resources():
-            if self.resource_store.get(resource.kind, resource.identity) is not None:
-                continue
-            with self.resource_store.lock(resource.kind, resource.identity):
-                if self.resource_store.get(resource.kind, resource.identity) is not None:
-                    continue
-                self.progress(f"building resource {resource.kind} {resource.identity[:12]}")
-                self.resource_store.publish(
-                    resource.kind,
-                    resource.identity,
-                    lambda directory, r=resource: r.resource.build(
-                        r.resolved, directory, self.context
-                    ),
-                    {"spec": dict(resource.resolved), "version": resource.resource.version},
-                )
+            build_resource(self.resource_store, resource, self.context, self.progress)
 
     def _resource(self, resource: PlannedResource) -> Any:
-        if resource.identity not in self._loaded:
-            directory = self.resource_store.get(resource.kind, resource.identity)
-            if directory is None:
-                raise TxturesError(f"resource {resource.kind} {resource.identity} is missing")
-            self._loaded[resource.identity] = resource.resource.load(
-                resource.resolved, directory, self.context
-            )
-        return self._loaded[resource.identity]
+        return load_resource(self.resource_store, resource, self.context, self._loaded)
 
     # Items
 
@@ -140,23 +199,39 @@ class Executor:
         self.counts[planned.identity].computed += len(documents)
         self._memo.clear()
 
-    def compute_items(self) -> None:
+    def compute_items(
+        self,
+        only: Collection[str] | None = None,
+        skip: Collection[str] = (),
+        wait: bool = True,
+    ) -> None:
         """Compute every missing item of every persisted variant.
+
+        `only`, if given, limits this to the variants with these identities,
+        and `skip` leaves out others. With `wait` false, items another
+        process holds are left to it instead of waited for, so a worker
+        stops as soon as nothing is left for it to take.
 
         A loaded resource, such as a model in GPU memory, is released once no
         later variant needs it.
         """
-        persisted = [planned for planned in self.plan.variants if planned.module.persist]
+        persisted = [
+            planned
+            for planned in self.plan.variants
+            if planned.module.persist
+            and (only is None or planned.identity in only)
+            and planned.identity not in skip
+        ]
         for index, planned in enumerate(persisted):
-            self._compute_variant(planned)
-            needed = {
+            self._compute_variant(planned, wait)
+            needed = self._keep | {
                 r.identity for later in persisted[index + 1 :] for r in later.resources.values()
             }
             for identity in list(self._loaded):
                 if identity not in needed:
                     del self._loaded[identity]
 
-    def _compute_variant(self, planned: PlannedVariant) -> None:
+    def _compute_variant(self, planned: PlannedVariant, wait: bool = True) -> None:
         kind = item_kind(planned.name)
         counts = self.counts[planned.identity]
         unique: dict[str, Document] = {}
@@ -171,6 +246,8 @@ class Executor:
         own = {i for position, i in enumerate(unique) if position % count == index}
         ordered = [i for i in missing if i in own] + [i for i in missing if i not in own]
         held_elsewhere = self._compute_unlocked(planned, [missing[i] for i in ordered])
+        if not wait:
+            return
         for document in held_elsewhere:
             identity = planned.item_identity(document)
             with self.items.lock(kind, identity):

@@ -221,3 +221,21 @@ def test_records_before_dev_was_recorded(prefix, tmp_path, monkeypatch):
     assert arguments == ["--prefix", str(prefix), "--compute", "cpu", "--dev"]
     monkeypatch.setattr(installation.importlib.util, "find_spec", lambda name: None)
     assert "--dev" not in installation.reinstall_arguments(installed)
+
+
+def test_an_own_home_is_recorded_and_kept_on_reinstall(prefix, tmp_path):
+    own = tmp_path / "dev-home"
+    with pytest.raises(SettingsError, match="not a directory"):
+        configured(prefix, tmp_path, home=own)
+    own.mkdir()
+    installed, messages = configured(prefix, tmp_path, home=own)
+    assert installed.home == own
+    assert any("its own home" in m for m in messages)
+
+    def home_argument(arguments):
+        return arguments[arguments.index("--home") + 1] if "--home" in arguments else None
+
+    assert home_argument(installation.reinstall_arguments(installed)) == str(own)
+    assert home_argument(installation.reinstall_arguments(installed, no_home=True)) is None
+    other = tmp_path / "other"
+    assert home_argument(installation.reinstall_arguments(installed, home=other)) == str(other)

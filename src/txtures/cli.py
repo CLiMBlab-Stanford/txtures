@@ -19,6 +19,7 @@ from txtures.definitions.store import init_home
 from txtures.engine import (
     Executor,
     TableStatus,
+    collection,
     item_status,
     plan_request,
     replanner,
@@ -27,6 +28,8 @@ from txtures.engine import (
     table_statuses,
 )
 from txtures.engine import slurm as slurm_jobs
+from txtures.engine.execution import build_resource
+from txtures.engine.planning import from_record, plan_resource
 from txtures.errors import Problem, SettingsError, TxturesError
 from txtures.inputs import InputReport, load_input, read_input, scan_inputs
 from txtures.settings import (
@@ -185,15 +188,25 @@ def build_parser() -> argparse.ArgumentParser:
         ("run", "compute a request and write its output table", run_command),
     ):
         sub = commands.add_parser(command, help=help_text)
-        sub.add_argument("name", help="input basename")
+        if command == "plan":
+            sub.add_argument("name", help="input basename")
+        else:
+            sub.add_argument(
+                "names",
+                nargs="+",
+                metavar="NAME",
+                help="input basename; several share one Slurm job array",
+            )
         sub.add_argument("-w", "--workflow", default="main", help="workflow ID (default: main)")
         sub.add_argument(
             "-m",
             "--module",
             dest="modules",
-            action="append",
+            action="extend",
+            nargs="+",
             metavar="MODULE",
-            help="feature module to include; repeat for several (default: all in the workflow)",
+            help="feature modules to include, each optionally as MODULE:WORKFLOW to use "
+            "another workflow for it (default: all in the workflow)",
         )
         if command == "plan":
             sub.add_argument("--json", action="store_true", help="print JSON")
@@ -204,12 +217,77 @@ def build_parser() -> argparse.ArgumentParser:
                 help="compute here even when the site submits to Slurm",
             )
             sub.add_argument(
-                "--workers",
+                "--nworkers",
+                dest="workers",
                 type=int,
                 metavar="N",
                 help="Slurm array tasks that share the work (default: slurm.workers)",
             )
+            sub.add_argument("--workers", dest="workers", type=int, help=argparse.SUPPRESS)
+            _size_arguments(sub)
         sub.set_defaults(handler=handler)
+
+    resources = commands.add_parser("resources", help="build the resources a request needs")
+    resource_commands = resources.add_subparsers(dest="resources_command", required=True)
+    build = resource_commands.add_parser(
+        "build",
+        help="build missing resources without computing items; Slurm workloads go to Slurm",
+    )
+    build.add_argument("name", nargs="?", help="input basename (not with --kind)")
+    build.add_argument("-w", "--workflow", default="main", help="workflow ID (default: main)")
+    build.add_argument(
+        "--kind", help="build one resource of this kind, such as gcg_treebank, not a request's"
+    )
+    build.add_argument(
+        "--spec",
+        action="append",
+        default=[],
+        metavar="KEY=VALUE",
+        help="a spec value of the --kind resource, read as YAML; repeat for several",
+    )
+    build.add_argument(
+        "-m",
+        "--module",
+        dest="modules",
+        action="append",
+        metavar="MODULE",
+        help="feature module whose resources to build; repeat for several (default: all)",
+    )
+    build.add_argument("--local", action="store_true", help="build everything here")
+    _size_arguments(build)
+    build.set_defaults(handler=resources_build_command)
+
+    module = commands.add_parser(
+        "module",
+        help="list modules, or one module's config keys",
+        description="`txtures module ls` lists the modules; "
+        "`txtures module NAME ls` lists the config keys of module NAME.",
+    )
+    module.add_argument("words", nargs="+", metavar="ls | NAME ls")
+    module.add_argument("--json", action="store_true", help="print JSON")
+    module.set_defaults(handler=module_command)
+
+    tools = commands.add_parser("tools", help="the Apptainer image of non-Python tools")
+    tool_commands = tools.add_subparsers(dest="tools_command", required=True)
+    tools_status = tool_commands.add_parser("status", help="show the runtime and the image")
+    tools_status.set_defaults(handler=tools_status_command)
+    tools_build = tool_commands.add_parser(
+        "build", help="build the image, as a Slurm job where Slurm is set up"
+    )
+    tools_build.add_argument("--local", action="store_true", help="build here")
+    _size_arguments(tools_build)
+    tools_build.set_defaults(handler=tools_build_command)
+    tools_exec = tool_commands.add_parser("exec", help="run a command in the image")
+    tools_exec.add_argument("argv", nargs=argparse.REMAINDER, metavar="COMMAND")
+    tools_exec.add_argument(
+        "--bind",
+        action="append",
+        default=[],
+        type=Path,
+        metavar="PATH",
+        help="mount PATH in the image; repeat for several (the working directory is always)",
+    )
+    tools_exec.set_defaults(handler=tools_exec_command)
 
     status = commands.add_parser("status", help="report which output tables are current")
     status.add_argument("names", nargs="*", metavar="NAME", help="input basenames (default: all)")
@@ -221,7 +299,9 @@ def build_parser() -> argparse.ArgumentParser:
     worker.add_argument("task", type=int)
     worker.set_defaults(handler=worker_command)
 
-    gc = commands.add_parser("gc", help="remove stale and broken output tables and finished jobs")
+    gc = commands.add_parser(
+        "gc", help="remove stale and broken tables and store entries, and finished jobs"
+    )
     gc.add_argument("--dry-run", action="store_true", help="list what would be removed")
     gc.set_defaults(handler=gc_command)
 
@@ -250,6 +330,15 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         dest="make_default",
         help="make the txtures command run this installation",
+    )
+    homes = install.add_mutually_exclusive_group()
+    homes.add_argument(
+        "--home",
+        type=Path,
+        help="give this installation its own txtures home, used before your site",
+    )
+    homes.add_argument(
+        "--no-home", action="store_true", help="use your site again instead of an own home"
     )
     install.set_defaults(handler=install_command)
 
@@ -507,7 +596,10 @@ def env_ls(args: argparse.Namespace) -> int:
 def _report_env(args: argparse.Namespace, path: Path, keys: Sequence[str], env) -> None:
     """Print where each of `keys` will come from in a shell that sources `path`."""
     settings = resolve_settings(
-        {key: getattr(args, key) for key in PATH_FLAGS}, env=env, tolerate_stale=True
+        {key: getattr(args, key) for key in PATH_FLAGS},
+        env=env,
+        tolerate_stale=True,
+        installation_home=installation.home_of_current(),
     )
     for key in dict.fromkeys(keys):
         setting = settings.values[key]
@@ -721,6 +813,28 @@ def inputs_check(args: argparse.Namespace) -> int:
     return 0
 
 
+def _size_arguments(parser: argparse.ArgumentParser) -> None:
+    group = parser.add_argument_group(
+        "Slurm job size",
+        "override what modules, resources, and slurm settings ask for, in every job "
+        "this command submits; no effect on work computed here",
+    )
+    group.add_argument("--time-hours", type=int, metavar="N", help="time limit, in hours")
+    group.add_argument("--memory-gb", type=int, metavar="N", help="memory, in GB")
+    group.add_argument("--ncores", type=int, metavar="N", help="CPU cores")
+    group.add_argument("--ngpus", type=int, metavar="N", help="GPUs; 0 for none")
+
+
+def _size(args: argparse.Namespace):
+    """The job size the command line asks for, or `None`."""
+    values = {
+        key: getattr(args, key)
+        for key in slurm_jobs.SIZE_FIELDS
+        if getattr(args, key, None) is not None
+    }
+    return slurm_jobs.size(values)
+
+
 def _stores(settings: Settings) -> tuple[EntryStore, EntryStore]:
     return EntryStore(settings.cache), EntryStore(settings.resource_store)
 
@@ -813,50 +927,89 @@ def _progress(message: str) -> None:
 
 
 def run_command(args: argparse.Namespace) -> int:
-    """Compute a request and write its output table, here or as a Slurm job."""
-    settings, plan = _plan(args)
-    for note in plan.notes:
-        print(f"note: {note}", file=sys.stderr)
+    """Compute requests and write their output tables, here or as one Slurm job.
+
+    With several inputs, one job array computes every input that is not
+    current when any of them has Slurm work missing; otherwise each is
+    computed here in turn.
+    """
+    settings = _settings(args)
     if args.workers is not None and (args.local or settings.executor == "local"):
-        raise TxturesError("--workers applies only to Slurm execution")
-    decision = slurm_jobs.decide(settings, args.local, plan, _stores(settings)[0])
-    if decision.note:
-        print(f"note: {decision.note}", file=sys.stderr)
-    if decision.submit:
-        return _submit(args, settings, plan)
-    executor = api.local_executor(plan, settings, _progress)
-    return _report_run(plan, executor, *run_request(plan, executor, args.modules))
+        raise TxturesError("--nworkers applies only to Slurm execution")
+    override = _size(args)
+    definitions = api.load_definitions(settings)
+    names = list(dict.fromkeys(args.names))
+    plans = [
+        plan_request(settings, definitions, name, args.workflow, args.modules) for name in names
+    ]
+    for note in dict.fromkeys(note for plan in plans for note in plan.notes):
+        print(f"note: {note}", file=sys.stderr)
+    decisions = [
+        slurm_jobs.decide(settings, args.local, plan, *_stores(settings)) for plan in plans
+    ]
+    for note in dict.fromkeys(d.note for d in decisions if d.note):
+        print(f"note: {note}", file=sys.stderr)
+    if any(decision.submit for decision in decisions):
+        return _submit(args, settings, plans, override)
+    status = 0
+    for plan in plans:
+        executor = api.local_executor(plan, settings, _progress)
+        status |= _report_run(plan, executor, *run_request(plan, executor, args.modules))
+    return status
 
 
-def _submit(args: argparse.Namespace, settings: Settings, plan) -> int:
-    if table_is_current(plan):
-        print(f"{plan.table_directory} is already current")
+def _submit(args: argparse.Namespace, settings: Settings, plans, override) -> int:
+    pending = []
+    for plan in plans:
+        if table_is_current(plan):
+            print(f"{plan.table_directory} is already current")
+        else:
+            pending.append(plan)
+    if not pending:
         return 0
     workers = args.workers if args.workers is not None else settings["slurm.workers"]
     if workers < 1:
-        raise TxturesError("--workers must be at least 1")
+        raise TxturesError("--nworkers must be at least 1")
     slurm = _slurm()
-    existing = slurm_jobs.read_job(slurm_jobs.job_directory(settings.outputs, plan))
+    if len(pending) == 1:
+        directory = slurm_jobs.job_directory(settings.outputs, pending[0])
+    else:
+        directory = slurm_jobs.batch_directory(settings.outputs, pending)
+    existing = slurm_jobs.read_job(directory)
     if existing is not None:
         states = slurm.states(existing.job_id)
         if slurm_jobs.is_active(states):
+            what = "this table" if len(pending) == 1 else "these tables"
             print(
-                f"job {existing.job_id} is already computing this table "
+                f"job {existing.job_id} is already computing {what} "
                 f"({slurm_jobs.summarize(states)})"
             )
             return 0
-    job = slurm_jobs.submit(plan, settings, args.modules, workers, slurm)
-    noun = "task" if workers == 1 else "tasks"
-    print(f"submitted job {job.job_id} ({workers} {noun}) to write {plan.table_directory}")
+    job = slurm_jobs.submit(pending, settings, args.modules, workers, slurm, override=override)
+    if len(pending) == 1:
+        target = str(pending[0].table_directory)
+    else:
+        target = f"{len(pending)} tables ({', '.join(p.input_name for p in pending)})"
+    for build in job.request.get("builds", []):
+        print(f"submitted job {build['job_id']} to build resource {build['kind']}")
+    for gpu in job.request.get("after_jobs", []):
+        noun = "task" if workers == 1 else "tasks"
+        print(f"submitted job {gpu['job_id']} ({workers} GPU {noun}) for the GPU work")
+    noun = "task" if job.workers == 1 else "tasks"
+    after = " after it" if job.request.get("after_jobs") else ""
+    after = after or (" after the builds" if job.request.get("builds") else "")
+    print(f"submitted job {job.job_id} ({job.workers} {noun}) to write {target}{after}")
     print(f"logs: {job.directory / 'logs'}; check progress with `txtures status`")
     return 0
 
 
 def worker_command(args: argparse.Namespace) -> int:
-    """Run one task of a submitted job: compute its shard, then write the table.
+    """Run one task of a submitted job.
 
-    A task for text given to `tx.compute` writes no table; the waiting call
-    assembles it from the cache.
+    A build job builds its resource; a GPU job computes only GPU work; a
+    request's job computes the rest and writes its tables. A task for text
+    given to `tx.compute` writes no table; the waiting call assembles it
+    from the cache.
     """
     # Before anything else, so neither this task nor any process it starts submits jobs.
     os.environ[slurm_jobs.TASK_VARIABLE] = str(args.directory)
@@ -866,34 +1019,390 @@ def worker_command(args: argparse.Namespace) -> int:
     request = job.request
     flags = {key: value for key, value in request["settings"].items()}
     flags["execution.executor"] = "local"
-    settings = resolve_settings(flags)
+    settings = resolve_settings(flags, installation_home=installation.home_of_current())
     environment.apply(settings)
-    plan = api.job_plan(job, settings)
-    if plan.table_identity != job.table_identity:
-        raise TxturesError(
-            "the input, definitions, or resolved resources changed after this job was "
-            "submitted; run `txtures run` again"
-        )
+    if job.source == "resource":
+        return _build_task(job, settings)
     if not 0 <= args.task < job.workers:
         raise TxturesError(f"task {args.task} is outside the job's {job.workers} tasks")
+    if job.source == "gpu":
+        return _gpu_task(job, settings, args.task)
+    if job.source == "texts":
+        plan = api.job_plan(job, settings)
+        if plan.table_identity != job.table_identity:
+            raise TxturesError(
+                "the input, definitions, or resolved resources changed after this job was "
+                "submitted; run `txtures run` again"
+            )
+        executor = _task_executor(plan, settings, args.task, job.workers)
+        _progress(f"task {args.task} of {job.workers} for {job.directory}")
+        executor.prepare_resources()
+        executor.compute_items(skip=set(job.request.get("skip", [])))
+        _report_counts(plan, executor)
+        print(f"computed the items of {job.directory}")
+        return 0
+    requests = job.request["requests"] if job.source == "batch" else [job.request]
+    return _table_task(requests, settings, args.task, job.workers)
+
+
+def _task_executor(
+    plan, settings: Settings, task: int, workers: int, loaded=None, keep=()
+) -> Executor:
     items, resources = _stores(settings)
-    executor = Executor(
+    return Executor(
         plan,
         items,
         resources,
         environment.run_context(settings),
         _progress,
-        shard=(args.task, job.workers),
+        shard=(task, workers),
+        loaded=loaded,
+        keep=keep,
     )
-    if job.source == "texts":
-        _progress(f"task {args.task} of {job.workers} for {job.directory}")
-        executor.prepare_resources()
-        executor.compute_items()
-        _report_counts(plan, executor)
-        print(f"computed the items of {job.directory}")
+
+
+def _replan(request, settings: Settings, definitions):
+    """Plan a recorded request again and check that it is the one submitted."""
+    if request.get("texts"):
+        plan = api.texts_plan(Path(request["texts"]), request, settings)
+    else:
+        plan = plan_request(
+            settings, definitions, request["input"], request["workflow"], request["modules"]
+        )
+    if plan.table_identity != request["table_identity"]:
+        raise TxturesError(
+            "the input, definitions, or resolved resources changed after this job was "
+            "submitted; run `txtures run` again"
+        )
+    return plan
+
+
+def _gpu_task(job: slurm_jobs.Job, settings: Settings, task: int) -> int:
+    """Run one task of a GPU job: only GPU work, never waiting for items others hold.
+
+    The task takes its share of each request's GPU items, then any item no
+    one holds, and ends when nothing is left for it, releasing the GPU.
+    """
+    definitions = api.load_definitions(settings)
+    status = 0
+    plans = {}
+    for request in job.request["requests"]:
+        try:
+            plans[request["table_identity"]] = _replan(request, settings, definitions)
+        except TxturesError as error:
+            print(f"txtures: {request['input']}: {error}", file=sys.stderr)
+            status = 1
+
+    def resources_of(request) -> set[str]:
+        plan = plans.get(request["table_identity"])
+        if plan is None:
+            return set()
+        variants = set(request["variants"])
+        return {
+            r.identity
+            for p in plan.variants
+            if p.identity in variants
+            for r in p.resources.values()
+        }
+
+    # Models stay loaded while a later request needs them, so the GPU never waits for a reload.
+    loaded: dict = {}
+    requests = job.request["requests"]
+    for position, request in enumerate(requests):
+        plan = plans.get(request["table_identity"])
+        if plan is None:
+            continue
+        keep = set().union(*(resources_of(later) for later in requests[position + 1 :]))
+        try:
+            executor = _task_executor(plan, settings, task, job.workers, loaded, keep)
+            _progress(f"GPU task {task} of {job.workers} for {request['input']}")
+            executor.prepare_resources()
+            executor.compute_items(only=set(request["variants"]), wait=False)
+            _report_counts(plan, executor)
+        except TxturesError as error:
+            print(f"txtures: {request['input']}: {error}", file=sys.stderr)
+            status = 1
+    return status
+
+
+def _table_task(requests, settings: Settings, task: int, workers: int) -> int:
+    """Run one task of a job that writes tables: each request in turn.
+
+    GPU work recorded in a request's `skip` was the GPU job's; a request
+    whose GPU results are still missing is reported and its table not
+    written, rather than computing GPU work here. A request whose input or
+    definitions changed since submission is reported and skipped.
+    """
+    definitions = api.load_definitions(settings)
+    items, _ = _stores(settings)
+    status = 0
+    for request in requests:
+        try:
+            plan = _replan(request, settings, definitions)
+            skip = set(request.get("skip", []))
+            executor = _task_executor(plan, settings, task, workers)
+            _progress(f"task {task} of {workers} for {plan.table_directory}")
+            if skip:
+                executor.prepare_resources()
+                executor.compute_items(skip=skip)
+                missing = [
+                    s.variant.name
+                    for s in item_status(plan, items)
+                    if s.variant.identity in skip and s.missing
+                ]
+                if missing:
+                    raise TxturesError(
+                        f"GPU results of {', '.join(dict.fromkeys(missing))} are missing "
+                        "(see the GPU job's logs); run `txtures run` again to compute them"
+                    )
+            status |= _report_run(plan, executor, *run_request(plan, executor, request["modules"]))
+        except TxturesError as error:
+            print(f"txtures: {request['input']}: {error}", file=sys.stderr)
+            status = 1
+    return status
+
+
+def _build_task(job: slurm_jobs.Job, settings: Settings) -> int:
+    """Build the one resource a build job was submitted for, with any missing dependencies."""
+    planned = from_record(job.request)
+    context = environment.run_context(settings)
+    _progress(f"building resource {planned.kind} {planned.identity[:12]} for {job.directory}")
+    if not build_resource(_stores(settings)[1], planned, context, _progress):
+        print(f"resource {planned.kind} {planned.identity[:12]} was already built")
+    else:
+        print(f"built resource {planned.kind} {planned.identity[:12]}")
+    return 0
+
+
+def resources_build_command(args: argparse.Namespace) -> int:
+    """Build the resources a request needs, without computing its items.
+
+    Resources whose workload is `slurm` are submitted as build jobs where
+    Slurm is set up, unless `--local`; the others are built here.
+    """
+    if args.kind:
+        settings = _settings(args)
+        planned = [_planned_kind(args, settings)]
+    else:
+        if not args.name:
+            raise TxturesError("give an input name, or --kind with a resource kind")
+        settings, plan = _plan(args)
+        for note in plan.notes:
+            print(f"note: {note}", file=sys.stderr)
+        planned = plan.resources()
+    _, store = _stores(settings)
+    missing = [r for r in planned if store.get(r.kind, r.identity) is None]
+    if not missing:
+        print("every resource is already built")
         return 0
-    _progress(f"task {args.task} of {job.workers} for {plan.table_directory}")
-    return _report_run(plan, executor, *run_request(plan, executor, request["modules"]))
+    submit = not args.local and settings.executor != "local" and not slurm_jobs.in_task()
+    submit = submit and slurm_jobs.available(settings)
+    context = environment.run_context(settings)
+    slurm = _slurm() if submit else None
+    override = _size(args)
+    for resource in missing:
+        if submit and resource.resource.workload(resource.resolved).slurm:
+            build = slurm_jobs.submit_build(resource, settings, slurm, override=override)
+            print(
+                f"job {build.job_id} builds resource {resource.kind} {resource.identity[:12]}; "
+                f"logs: {build.directory / 'logs'}"
+            )
+            continue
+        build_resource(store, resource, context, _progress)
+        print(f"built resource {resource.kind} {resource.identity[:12]}")
+    return 0
+
+
+def _planned_kind(args: argparse.Namespace, settings: Settings):
+    """The resource that `resources build --kind KIND --spec KEY=VALUE...` names."""
+    import yaml
+
+    from txtures.modules import resource_class
+
+    spec = {}
+    for item in args.spec:
+        key, sep, value = item.partition("=")
+        if not sep or not key:
+            raise TxturesError(f"--spec {item!r} is not KEY=VALUE")
+        spec[key] = yaml.safe_load(value)
+    try:
+        cls = resource_class(args.kind)
+    except KeyError:
+        raise TxturesError(f"there is no resource kind {args.kind!r}") from None
+    return plan_resource(args.kind, cls(spec), environment.run_context(settings))
+
+
+def _first_line(cls) -> str:
+    """The first line of a class's docstring."""
+    return (cls.__doc__ or "").strip().splitlines()[0] if cls.__doc__ else ""
+
+
+def _type_name(annotation) -> str:
+    """A short, readable form of a config field's type."""
+    import typing
+
+    origin = typing.get_origin(annotation)
+    if origin is typing.Literal:
+        return " | ".join(str(value) for value in typing.get_args(annotation))
+    if origin in (typing.Union, getattr(__import__("types"), "UnionType", None)):
+        return " | ".join(_type_name(arg) for arg in typing.get_args(annotation))
+    if origin in (tuple, list):
+        (item, *_) = typing.get_args(annotation) or (str,)
+        return f"list of {_type_name(item)}"
+    if annotation is type(None):
+        return "null"
+    return getattr(annotation, "__name__", str(annotation))
+
+
+def _module_rows() -> list[dict]:
+    from txtures.modules import REGISTRY
+
+    rows = []
+    for name in REGISTRY:
+        cls = REGISTRY[name]
+        module = cls()
+        rows.append(
+            {
+                "name": name,
+                "features": list(cls.features),
+                "requires": list(cls.requires),
+                "stored": cls.persist,
+                "slurm": module.workload(cls.Config()).slurm,
+                "contract_version": cls.contract_version,
+                "description": _first_line(cls),
+            }
+        )
+    return rows
+
+
+def _config_rows(name: str) -> list[dict]:
+    from pydantic_core import PydanticUndefined
+
+    from txtures.modules import REGISTRY
+
+    if name not in REGISTRY:
+        raise TxturesError(
+            f"no module named {name!r}; `txtures module ls` lists them: {', '.join(REGISTRY)}"
+        )
+    cls = REGISTRY[name]
+    rows = []
+    for key, info in cls.Config.model_fields.items():
+        default = info.get_default(call_default_factory=True)
+        if default is PydanticUndefined:
+            default = None
+        rows.append(
+            {
+                "key": key,
+                "type": _type_name(info.annotation),
+                "default": list(default) if isinstance(default, tuple) else default,
+                "sweepable": key in cls.sweeps,
+                "description": " ".join((info.description or "").split()),
+            }
+        )
+    return rows
+
+
+def module_command(args: argparse.Namespace) -> int:
+    """List the modules (`module ls`) or one module's config keys (`module NAME ls`)."""
+    words = args.words
+    if words == ["ls"]:
+        rows = _module_rows()
+        if args.json:
+            print(json.dumps(rows, indent=2))
+            return 0
+        width = max(len(row["name"]) for row in rows)
+        for row in rows:
+            features = ", ".join(row["features"]) or "(no columns)"
+            needs = f"; needs {', '.join(row['requires'])}" if row["requires"] else ""
+            where = "; Slurm" if row["slurm"] else ""
+            print(f"{row['name']:<{width}}  {features}{needs}{where}")
+            if row["description"]:
+                print(f"{'':<{width}}  {row['description']}")
+        return 0
+    if len(words) == 2 and "ls" in words:
+        name = words[0] if words[1] == "ls" else words[1]
+        rows = _config_rows(name)
+        if args.json:
+            print(json.dumps(rows, indent=2))
+            return 0
+        if not rows:
+            print(f"{name} has no config keys")
+        for row in rows:
+            default = json.dumps(row["default"])
+            sweep = ", sweepable" if row["sweepable"] else ""
+            print(f"{row['key']}: {row['type']} (default {default}{sweep})")
+            if row["description"]:
+                print(f"  {row['description']}")
+        return 0
+    raise TxturesError("use `txtures module ls` or `txtures module NAME ls`")
+
+
+def _tools_image(settings: Settings):
+    from txtures.tools import ToolsImage
+
+    return plan_resource("tools", ToolsImage(), environment.run_context(settings))
+
+
+def tools_status_command(args: argparse.Namespace) -> int:
+    """Show the Apptainer runtime and whether the image of this definition is built."""
+    from txtures import tools
+
+    settings = _settings(args)
+    context = environment.run_context(settings)
+    if context.runtime is not None:
+        print(f"runtime: {context.runtime} (execution.runtime)")
+    else:
+        managed = tools.managed_runtime(settings.resources)
+        where = tools.runtime_directory(settings.resources)
+        state = "installed" if managed else "not installed; installed on first use"
+        print(f"runtime: Apptainer {tools.MANAGED_RUNTIME['version']} in {where} ({state})")
+    image = _tools_image(settings)
+    print(f"definition: {tools.DEFINITION} (sha256 {image.resolved['definition_sha256'][:12]})")
+    directory = _stores(settings)[1].get(image.kind, image.identity)
+    if directory is None:
+        print(f"image {image.identity[:12]}: not built; run `txtures tools build`")
+        return 0
+    manifest = json.loads((directory / tools.IMAGE_MANIFEST).read_text(encoding="utf-8"))
+    print(f"image {image.identity[:12]}: {directory / tools.SANDBOX}")
+    print(f"  built {manifest['built']} on {manifest['host']} with {manifest['apptainer']}")
+    print(f"  kenlm {manifest['kenlm']['commit'][:12]}, {len(manifest['packages'])} packages")
+    return 0
+
+
+def tools_build_command(args: argparse.Namespace) -> int:
+    """Build the tools image: as a Slurm job where Slurm is set up, unless `--local`."""
+    settings = _settings(args)
+    image = _tools_image(settings)
+    store = _stores(settings)[1]
+    if store.get(image.kind, image.identity) is not None:
+        print(f"the tools image {image.identity[:12]} is already built")
+        return 0
+    if (
+        not args.local
+        and settings.executor != "local"
+        and not slurm_jobs.in_task()
+        and slurm_jobs.available(settings)
+    ):
+        job = slurm_jobs.submit_build(image, settings, _slurm(), override=_size(args))
+        print(f"job {job.job_id} builds the tools image; logs: {job.directory / 'logs'}")
+        return 0
+    build_resource(store, image, environment.run_context(settings), _progress)
+    print(f"built the tools image {image.identity[:12]}")
+    return 0
+
+
+def tools_exec_command(args: argparse.Namespace) -> int:
+    """Run a command in the built tools image, with the working directory mounted."""
+    settings = _settings(args)
+    image = _tools_image(settings)
+    directory = _stores(settings)[1].get(image.kind, image.identity)
+    if directory is None:
+        raise TxturesError("the tools image is not built; run `txtures tools build`")
+    argv = args.argv[1:] if args.argv[:1] == ["--"] else args.argv
+    if not argv:
+        raise TxturesError("give the command to run, as in `txtures tools exec -- lmplz --help`")
+    loaded = image.resource.load(image.resolved, directory, environment.run_context(settings))
+    return loaded.run(argv, binds=[Path.cwd(), *args.bind]).returncode
 
 
 def _report_counts(plan, executor: Executor) -> None:
@@ -996,6 +1505,8 @@ def install_command(args: argparse.Namespace) -> int:
             compute=args.compute,
             dev=args.dev,
             make_default=args.make_default,
+            home=args.home.expanduser().absolute() if args.home else None,
+            no_home=args.no_home,
         ),
     ]
     print(f"running {shlex.join(command)}", flush=True)
@@ -1005,7 +1516,7 @@ def install_command(args: argparse.Namespace) -> int:
 
 
 def gc_command(args: argparse.Namespace) -> int:
-    """Remove stale and broken output tables and the records of finished jobs."""
+    """Remove stale and broken output tables and store entries, and finished jobs' records."""
     removable = [s for s in _table_statuses(args, None) if s.state != "current"]
     for status in removable:
         if args.dry_run:
@@ -1024,9 +1535,46 @@ def gc_command(args: argparse.Namespace) -> int:
         else:
             shutil.rmtree(job.directory)
             print(f"removed the record and logs of finished job {job.job_id}")
-    if not removable and not finished:
+    settings = _settings(args)
+    items, resources = _stores(settings)
+    # A store reached through a symbolic link is shared with another home, whose
+    # (possibly older) txtures may still use entries this one finds stale.
+    for name, directory, store in (
+        ("cache", settings.cache, items),
+        ("resources", settings.resources, resources),
+    ):
+        if directory.is_symlink():
+            print(
+                f"skipped the {name} store: {directory} links to {directory.resolve()}, shared with another home"
+            )
+            store.root = directory / ".gc-skipped-shared-store"
+    garbage = collection.find(items, resources, api.load_definitions(settings).registry)
+    freed = 0
+    for found in garbage:
+        size = found.size
+        freed += size
+        label = (
+            f"{found.store} {found.kind} {found.path.name[:12]} ({found.reason}, {_bytes(size)})"
+        )
+        if args.dry_run:
+            print(f"would remove {label}")
+        else:
+            collection.remove(found)
+            print(f"removed {label}")
+    if garbage:
+        verb = "would free" if args.dry_run else "freed"
+        print(f"{verb} {_bytes(freed)} in the stores")
+    if not removable and not finished and not garbage:
         print("nothing to remove")
     return 0
+
+
+def _bytes(size: int) -> str:
+    for unit in ("B", "KB", "MB", "GB"):
+        if size < 1000 or unit == "GB":
+            return f"{size:.0f} {unit}" if unit == "B" else f"{size:.1f} {unit}"
+        size /= 1000
+    raise AssertionError
 
 
 def main(argv: Sequence[str] | None = None) -> int:

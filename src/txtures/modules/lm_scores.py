@@ -29,7 +29,7 @@ from pydantic import Field, model_validator
 
 from txtures.corpus import Corpus, Document
 from txtures.errors import TxturesError
-from txtures.modules.base import Item, Module, ModuleConfig, RunContext
+from txtures.modules.base import Item, Module, ModuleConfig, RunContext, Workload
 from txtures.modules.hf_model import HFModel, LanguageModel, is_local
 
 LOGITS_BUDGET_BYTES = 1 << 30
@@ -176,13 +176,16 @@ class LMScores(Module):
     name = "lm_scores"
     contract_version = 1
     Config = LMScoresConfig
+    identifying = ("model",)
     sweeps = {
         "model": ("model", "revision"),
         "window": ("window", "stride"),
         "context": ("context",),
     }
     batch_size = 8
-    intensive = True
+
+    def workload(self, config: LMScoresConfig) -> Workload:
+        return Workload(slurm=True)
 
     def resources(self, config: LMScoresConfig):
         return {

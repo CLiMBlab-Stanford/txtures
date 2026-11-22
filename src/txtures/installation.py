@@ -62,6 +62,12 @@ class Installation:
         return f"installation ({self.prefix / RECORD})"
 
     @property
+    def home(self) -> Path | None:
+        """The txtures home this installation uses, if it has its own (`./install --home`)."""
+        value = self.record.get("home")
+        return None if value is None else Path(value)
+
+    @property
     def dev(self) -> bool | None:
         """Whether the development tools were installed, or `None` if the record predates `dev`."""
         value = self.record.get("dev")
@@ -131,6 +137,14 @@ def current() -> Installation | None:
     return installation
 
 
+def home_of_current() -> tuple[Path, str] | None:
+    """The running installation's own home and its source, for `resolve_settings`."""
+    installation = current()
+    if installation is None or installation.home is None:
+        return None
+    return installation.home, installation.source
+
+
 def reinstall_arguments(
     installation: Installation,
     *,
@@ -138,12 +152,15 @@ def reinstall_arguments(
     compute: str | None = None,
     dev: bool | None = None,
     make_default: bool = False,
+    home: Path | None = None,
+    no_home: bool = False,
 ) -> list[str]:
     """The `./install` arguments that rebuild `installation` with the same choices.
 
     The prefix, the PyTorch build, the development tools, and the directory
     of the `txtures` command are kept unless `compute` or `dev` changes
-    them. Records from before 0.5.0 do not say whether the development tools
+    them, and so is the installation's own home unless `home` replaces it
+    or `no_home` removes it. Records from before 0.5.0 do not say whether the development tools
     were installed; this process's environment is checked for pytest
     instead. They also do not say where the `txtures` command went, so
     `./install` uses its default there.
@@ -157,6 +174,9 @@ def reinstall_arguments(
     arguments += ["--compute", compute or installation.compute]
     if dev:
         arguments.append("--dev")
+    kept_home = None if no_home else (home or installation.home)
+    if kept_home is not None:
+        arguments += ["--home", str(kept_home)]
     if "bin_dir" in installation.record:
         bin_dir = installation.record["bin_dir"]
         arguments += ["--no-launcher"] if bin_dir is None else ["--bin-dir", str(bin_dir)]
@@ -224,6 +244,7 @@ def configure(
     uv_version: str = "",
     site: Path | None = None,
     dev: bool = False,
+    home: Path | None = None,
 ) -> tuple[Installation, list[str]]:
     """Write the installation record and launchers.
 
@@ -231,7 +252,10 @@ def configure(
     `bin_dir` where it put the `txtures` command, or `None` for no command,
     so that `txtures install` can keep both. The record holds no settings. One written by an earlier version that did
     is rewritten without them, and a message names them. `site`, a
-    txtures home, is chosen as the user's site, as `txtures site use` does. Returns the installation and messages to print.
+    txtures home, is chosen as the user's site, as `txtures site use` does.
+    `home`, a txtures home, is recorded as this installation's own: it
+    applies to this installation only and comes before the user's site.
+    Returns the installation and messages to print.
 
     Raises:
         SettingsError: A choice is invalid, or `site` is not a directory.
@@ -244,6 +268,10 @@ def configure(
         previous = None
     if site is not None and not site.expanduser().is_dir():
         raise SettingsError(f"site {site} is not a txtures home directory")
+    if home is not None and not home.expanduser().is_dir():
+        raise SettingsError(
+            f"home {home} is not a directory; create it with `txtures site init {home}`"
+        )
 
     environment = prefix / "env"
     record = {
@@ -257,6 +285,8 @@ def configure(
         "python_version": platform.python_version(),
         "uv_version": uv_version,
     }
+    if home is not None:
+        record["home"] = str(home.expanduser().absolute())
     staging = prefix / f".{RECORD}.tmp"
     staging.write_text(json.dumps(record, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     os.replace(staging, prefix / RECORD)
@@ -271,6 +301,8 @@ def configure(
         )
     if bin_dir is not None:
         messages.append(install_user_launcher(bin_dir, launcher, make_default))
+    if home is not None:
+        messages.append(f"this installation uses its own home, {record['home']}")
     if site is not None:
         path, legacy = use_site(site)
         messages.append(f"set home to {site} in {path}")
@@ -296,6 +328,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     setup.add_argument("--uv-version", default="")
     setup.add_argument("--site", type=Path)
     setup.add_argument("--dev", action="store_true")
+    setup.add_argument("--home", type=Path)
     args = parser.parse_args(argv)
     try:
         _, messages = configure(
@@ -307,6 +340,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             uv_version=args.uv_version,
             site=args.site,
             dev=args.dev,
+            home=args.home,
         )
     except SettingsError as error:
         print(f"txtures: error: {error}", file=sys.stderr)

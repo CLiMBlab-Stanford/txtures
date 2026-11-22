@@ -6,7 +6,7 @@ from conftest import write
 from txtures.definitions import Definitions
 from txtures.definitions.resolution import derive_label
 from txtures.errors import DefinitionError
-from txtures.modules import Module, ModuleConfig, Registry
+from txtures.modules import REGISTRY, Module, ModuleConfig, Registry
 from txtures.modules.lm_scores import LMScoresConfig
 
 
@@ -15,6 +15,8 @@ def problems(error: pytest.ExceptionInfo[DefinitionError]) -> str:
 
 
 def column_names(definitions: Definitions, workflow: str = "main", **kwargs) -> list[str]:
+    """Feature column names of `workflow`, requesting only `surprisal` unless `modules` is given."""
+    kwargs.setdefault("modules", ["surprisal"])
     return [column.name for column in definitions.expand(workflow, **kwargs).columns()]
 
 
@@ -25,7 +27,10 @@ def test_packaged_main_uses_schema_defaults():
     expansion = Definitions.packaged().expand()
     (lm,) = expansion.variants["lm_scores"]
     assert lm.config == LMScoresConfig()
-    assert [column.name for column in expansion.columns()] == ["surprisal"]
+    features = [name for name in REGISTRY if REGISTRY[name].features]
+    assert list(expansion.requested) == features
+    # The model always labels surprisal, even when it is not swept.
+    assert "surprisal_gpt2" in [column.name for column in expansion.columns()]
 
 
 def test_digest_ignores_how_defaults_are_written(store):
@@ -115,13 +120,14 @@ def test_list_sweep_matches_hand_written_configs(store):
     write(store / "workflows" / "swept.yml", "lm_scores: swept\n")
     write(store / "workflows" / "listed.yml", "lm_scores: [gpt2, pythia]\n")
     definitions = Definitions.load(store)
-    swept = definitions.expand("swept")
-    listed = definitions.expand("listed")
+    swept = definitions.expand("swept", ["surprisal"])
+    listed = definitions.expand("listed", ["surprisal"])
     assert [v.digest for v in swept.variants["surprisal"]] == [
         v.digest for v in listed.variants["surprisal"]
     ]
     assert [c.name for c in swept.columns()] == ["surprisal_gpt2", "surprisal_pythia410m"]
-    assert [c.name for c in listed.columns()] == ["surprisal_gpt2", "surprisal_pythia"]
+    # A config named after its model gets no second model label.
+    assert [c.name for c in listed.columns()] == ["surprisal_gpt2", "surprisal_pythia_pythia410m"]
 
 
 def test_labeled_sweep_entries_may_set_their_group(store):
@@ -179,9 +185,19 @@ def test_invalid_variant_names_its_labels(store):
 
 
 def test_single_value_sweep_adds_no_label(store):
-    write(store / "configs" / "lm_scores" / "a.yml", "model: [gpt2]\n")
+    write(store / "configs" / "lm_scores" / "a.yml", "model: [gpt2]\nwindow: [512]\n")
     write(store / "workflows" / "a.yml", "lm_scores: a\n")
-    assert column_names(Definitions.load(store), "a") == ["surprisal"]
+    assert column_names(Definitions.load(store), "a") == ["surprisal_gpt2"]
+
+
+def test_identifying_labels_use_the_basename_of_hub_and_local_models(store):
+    write(store / "configs" / "lm_scores" / "a.yml", "model: EleutherAI/pythia-410m\n")
+    write(store / "configs" / "lm_scores" / "b.yml", "model: /models/my-toy.v2\n")
+    write(store / "workflows" / "a.yml", "lm_scores: a\n")
+    write(store / "workflows" / "b.yml", "lm_scores: b\n")
+    definitions = Definitions.load(store)
+    assert column_names(definitions, "a") == ["surprisal_pythia410m"]
+    assert column_names(definitions, "b") == ["surprisal_mytoyv2"]
 
 
 def test_sweeps_expand_as_product_and_propagate_downstream(store):
@@ -191,7 +207,7 @@ def test_sweeps_expand_as_product_and_propagate_downstream(store):
     )
     write(store / "configs" / "surprisal" / "b.yml", "correction: [word_boundary, none]\n")
     write(store / "workflows" / "w.yml", "lm_scores: a\nsurprisal: b\n")
-    expansion = Definitions.load(store).expand("w")
+    expansion = Definitions.load(store).expand("w", ["surprisal"])
     assert len(expansion.variants["lm_scores"]) == 4
     assert [column.name for column in expansion.columns()] == [
         "surprisal_m1_document_wordboundary",
@@ -212,9 +228,9 @@ def test_config_id_labels_precede_sweep_labels(store):
     write(store / "configs" / "lm_scores" / "b.yml", "model: pythia\nwindow: [512, 1024]\n")
     write(store / "workflows" / "w.yml", "lm_scores: [a, b]\n")
     assert column_names(Definitions.load(store), "w") == [
-        "surprisal_a",
-        "surprisal_b_window512",
-        "surprisal_b_window1024",
+        "surprisal_a_gpt2",
+        "surprisal_b_pythia_window512",
+        "surprisal_b_pythia_window1024",
     ]
 
 
@@ -226,13 +242,26 @@ def test_max_variants_limit_is_enforced(store):
     assert "lm_scores expands to 3 variants" in problems(error)
 
 
+def test_colliding_columns_use_full_model_names(store):
+    configs = store / "configs" / "lm_scores"
+    write(configs / "a.yml", "model: x/b\nwindow: {c: 512, d: 1024}\n")
+    write(configs / "a_b.yml", "model: c\n")
+    write(store / "workflows" / "w.yml", "lm_scores: [a, a_b]\n")
+    assert column_names(Definitions.load(store), "w") == [
+        "surprisal_a_x_b_c",
+        "surprisal_a_b_d",
+        "surprisal_a_b_c",
+    ]
+
+
 def test_column_collision_detection(store):
-    write(store / "configs" / "lm_scores" / "a.yml", "model: {x: gpt2, y: pythia}\n")
-    write(store / "configs" / "lm_scores" / "a_x.yml", "model: other\n")
-    write(store / "workflows" / "w.yml", "lm_scores: [a, a_x]\n")
+    configs = store / "configs" / "lm_scores"
+    write(configs / "a.yml", "model: c\nwindow: {b: 512, d: 1024}\n")
+    write(configs / "a_c.yml", "model: b\n")
+    write(store / "workflows" / "w.yml", "lm_scores: [a, a_c]\n")
     with pytest.raises(DefinitionError) as error:
-        Definitions.load(store).expand("w")
-    assert "two variants produce column 'surprisal_a_x'" in problems(error)
+        Definitions.load(store).expand("w", ["surprisal"])
+    assert "two variants produce column 'surprisal_a_c_b'" in problems(error)
 
 
 # Workflows
@@ -241,7 +270,7 @@ def test_column_collision_detection(store):
 def test_workflow_without_extends_starts_from_packaged_main(store):
     write(store / "workflows" / "bare.yml", "surprisal: main\n")
     definitions = Definitions.load(store)
-    assert definitions.workflow("bare") == {"lm_scores": ("main",), "surprisal": ("main",)}
+    assert definitions.workflow("bare") == {name: ("main",) for name in REGISTRY}
 
 
 def test_workflow_rejects_unknown_modules_and_bad_values(store):
@@ -325,3 +354,49 @@ def test_registry_rejects_inconsistent_modules():
 
     with pytest.raises(ValueError, match="must list 'model' first"):
         Registry([Bad])
+
+
+# Per-module workflows
+
+
+def test_modules_can_name_their_own_workflow(store):
+    write(store / "configs" / "lm_scores" / "p.yml", "model: pythia\n")
+    write(store / "workflows" / "w1.yml", "lm_scores: p\n")
+    write(store / "workflows" / "w2.yml", "extends: w1\n")
+    definitions = Definitions.load(store)
+    modules = ["word_length", "surprisal", "surprisal:w1", "surprisal:w2"]
+    expansion = definitions.expand("main", modules)
+    assert expansion.requested == tuple(modules)
+    columns = expansion.columns()
+    assert [column.name for column in columns] == [
+        "word_length",
+        "surprisal_gpt2_main",
+        "surprisal_pythia_w1",
+        "surprisal_pythia_w2",
+    ]
+    assert [column.workflow for column in columns] == ["main", "main", "w1", "w2"]
+    # w1 and w2 resolve to the same computation, which is planned once.
+    assert columns[2].variant.digest == columns[3].variant.digest
+    assert len(expansion.variants["lm_scores"]) == 2
+    assert len(expansion.variants["surprisal"]) == 2
+
+
+def test_module_under_one_other_workflow_has_no_workflow_suffix(store):
+    write(store / "configs" / "lm_scores" / "p.yml", "model: pythia\n")
+    write(store / "workflows" / "w1.yml", "lm_scores: p\n")
+    definitions = Definitions.load(store)
+    names = column_names(definitions, modules=["word_length", "surprisal:w1"])
+    assert names == ["word_length", "surprisal_pythia"]
+    # Naming the default workflow explicitly is the same request as naming none.
+    assert column_names(definitions, modules=["surprisal", "surprisal:main"]) == ["surprisal_gpt2"]
+
+
+def test_module_workflow_errors(store):
+    definitions = Definitions.packaged()
+    with pytest.raises(DefinitionError) as error:
+        definitions.expand("main", ["surprisal:nope"])
+    assert "no workflow named 'nope'" in problems(error)
+    for bad in ["surprisal:", "surprisal:a:b", "surprisal:bad id", ":w1"]:
+        with pytest.raises(DefinitionError) as error:
+            definitions.expand("main", [bad])
+        assert "malformed module request" in problems(error)

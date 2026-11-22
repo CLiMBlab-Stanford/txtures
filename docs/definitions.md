@@ -59,9 +59,23 @@ The workflow alone decides which config each module uses. Configs never name
 other configs, so here `surprisal` keeps its `main` config and reads the
 `lm_scores` results computed under `pythia410m`.
 
-`txtures run NAME --workflow ID` uses a workflow. `--module` (`-m`), which
-can be repeated, limits the table to some feature modules; modules they
-depend on still run but add no columns.
+`txtures run NAME --workflow ID` uses a workflow. `--module` (`-m`) limits
+the table to some feature modules; modules they depend on still run but add
+no columns. It takes several names, and it can be repeated.
+
+The workflow given with `--workflow` is a default. A module can name its own
+workflow after `:`, and that module and every module it depends on are
+then resolved under that workflow. A module can be requested under several
+workflows:
+
+```sh
+txtures run NAME -m word_length surprisal surprisal:pythia
+```
+
+Here `word_length` and the first `surprisal` use `main`, and the second
+`surprisal` uses `pythia`, so the table has GPT-2 and Pythia surprisal side
+by side. Work that two workflows share, such as an upstream module with
+the same config in both, is computed once.
 
 ## Sweeps
 
@@ -102,22 +116,36 @@ setting is raised.
 
 ## Column names
 
-A feature with one variant keeps its plain name, such as `surprisal`. With
-several, each column name adds the labels of the swept values in its lineage,
-upstream first, joined with `_`:
+Each column name is the feature followed by the labels of its variant's
+lineage, upstream first, joined with `_`. Two kinds of label enter it:
+
+- the labels of swept values, and of config IDs listed in a workflow;
+- the language model, which labels every column computed from it, even
+  when it is not swept. Plain surprisal under GPT-2 is `surprisal_gpt2`.
 
 ```text
 document_id  region_index  text  char_start  char_end  surprisal_gpt2  surprisal_pythia70m
 ```
 
-A sweep with one value adds no label. Labels must match
-`[A-Za-z][A-Za-z0-9_]*`. A label derived from a string keeps the part after
-the last `/` with characters other than letters and digits removed, so
-`EleutherAI/pythia-410m` becomes `pythia410m` and `word_boundary` becomes
-`wordboundary`. A number, Boolean, or null becomes the parameter name followed
-by the value with `.` and `-` removed, as in `window512`. Two variants with the
-same label, or two columns with the same name, are an error; give explicit
-labels with a mapping.
+A module requested under more than one workflow also adds the workflow ID
+at the end, as in `surprisal_gpt2_main` and `surprisal_pythia410m_pythia`.
+A module requested under one workflow adds none, whichever workflow it is.
+
+A sweep with one value adds no label of its own. A config listed in a
+workflow whose ID is already the model's label adds the model label once.
+
+Labels must match `[A-Za-z][A-Za-z0-9_]*`. A label derived from a string
+keeps the part after the last `/` with characters other than letters and
+digits removed, so `EleutherAI/pythia-410m` becomes `pythia410m`, a local
+model directory `/models/my-toy.v2` becomes `mytoyv2`, and `word_boundary`
+becomes `wordboundary`. A number, Boolean, or null becomes the parameter
+name followed by the value with `.` and `-` removed, as in `window512`.
+
+When two columns would get the same name, they use the model's full name
+instead, every `/`-separated part joined with `_` (`EleutherAI_pythia410m`;
+the last two parts of a local path). If that does not separate them, or
+two variants of one sweep get the same label, it is an error; give
+explicit labels with a mapping.
 
 Analyses should not parse column names. Each table's `NAME.columns.tsv`
 lists every feature column with its module, labels, and variant identity,

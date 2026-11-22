@@ -30,12 +30,39 @@ class RunContext:
     """Execution settings passed to modules and resources. They never affect results.
 
     `hf_token` authenticates with the Hugging Face hub; `None` lets the hub
-    library find a token itself.
+    library find a token itself. `resources` is the shared resources
+    directory, where txtures keeps its managed Apptainer runtime, and
+    `runtime` an Apptainer executable that replaces that runtime. `corpora`
+    maps the names of site corpora that users provide themselves, such as
+    `ptb3`, to their directories; resources that read them identify them by
+    their contents, never by these paths.
     """
 
     device: str = "auto"
     hf_cache: Path | None = None
     hf_token: str | None = field(default=None, repr=False)
+    resources: Path | None = None
+    runtime: Path | None = None
+    corpora: Mapping[str, Path] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class Workload:
+    """Where a module's results or a resource's build are computed, and what they need.
+
+    With `slurm` true, missing work is submitted to Slurm when the `auto`
+    executor finds Slurm set up. The other fields shape that job: each one
+    left as `None` takes the site's `slurm` setting. All of them are ignored
+    when `slurm` is false and when computing locally (`--local`,
+    `local=True`, or the `local` executor). A workload never enters an
+    identity.
+    """
+
+    slurm: bool = False
+    time_hours: int | None = None
+    memory_gb: int | None = None
+    ncores: int | None = None
+    ngpus: int | None = None
 
 
 class Resource:
@@ -58,15 +85,48 @@ class Resource:
     def __init__(self, spec: Mapping[str, Any]):
         self.spec = dict(spec)
 
+    def dependencies(self) -> Mapping[str, Resource]:
+        """Other resources that building this one needs, by name. The default needs none.
+
+        Dependencies are built first and passed to `build` as `dependencies`,
+        loaded; their identities are part of this resource's identity.
+        """
+        return {}
+
     def resolve(self, context: RunContext) -> dict[str, Any]:
         """Return the fully determined spec. The default returns `spec` unchanged."""
         return dict(self.spec)
 
+    def stale(self, manifest: Mapping[str, Any]) -> str | None:
+        """Why a stored entry of this kind can never be requested again, or `None`.
+
+        `manifest` is the entry's manifest, with the resolved spec under
+        `spec` and the version of txtures that built it under
+        `txtures_version`. `txtures gc` removes entries that are stale. The
+        default never finds one stale; entries of older `version`s are
+        found stale without it.
+        """
+        return None
+
+    def workload(self, resolved: Mapping[str, Any]) -> Workload:
+        """Where to build this resource. With `slurm`, a missing resource is
+        built by a Slurm job of its own before the work that needs it. The
+        default builds it wherever it is needed."""
+        return Workload()
+
     def build(self, resolved: Mapping[str, Any], directory: Path, context: RunContext) -> None:
-        """Write the resource's files into `directory`. The default writes nothing."""
+        """Write the resource's files into `directory`. The default writes nothing.
+
+        A resource with `dependencies` is built with one more keyword
+        argument, `dependencies`: each dependency loaded, by name.
+        """
 
     def load(self, resolved: Mapping[str, Any], directory: Path, context: RunContext) -> Any:
-        """Return the in-memory object that modules receive."""
+        """Return the in-memory object that modules receive.
+
+        A resource with `dependencies` is loaded with one more keyword
+        argument, `dependencies`: each dependency loaded, by name.
+        """
         raise NotImplementedError
 
 
@@ -104,13 +164,13 @@ class Module:
             config fields one sweep entry may set, starting with the key
             itself; for example, a `model` entry may also set `revision`.
             Order determines the order in which sweeps expand.
+        identifying: Config fields that identify what the module computes
+            with, such as a language model's `model`. Each one labels the
+            columns of this module and every module downstream of it, even
+            when it is not swept.
         persist: Whether results are kept in the cache. Cheap modules
             set this to false and are recomputed whenever they are needed.
         batch_size: Maximum number of documents passed to one `run_batch` call.
-        intensive: Whether computing the module's results needs heavy
-            compute, such as running a neural model, best on a GPU. With
-            `execution.executor` set to `auto`, a request whose missing
-            results include an intensive module's is submitted to Slurm.
     """
 
     name: ClassVar[str]
@@ -119,13 +179,19 @@ class Module:
     requires: ClassVar[tuple[str, ...]] = ()
     features: ClassVar[tuple[str, ...]] = ()
     sweeps: ClassVar[Mapping[str, tuple[str, ...]]] = {}
+    identifying: ClassVar[tuple[str, ...]] = ()
     persist: ClassVar[bool] = True
     batch_size: ClassVar[int] = 1
-    intensive: ClassVar[bool] = False
 
     def resources(self, config: ModuleConfig) -> Mapping[str, Resource]:
         """Return the resources a config needs, by name. The default needs none."""
         return {}
+
+    def workload(self, config: ModuleConfig) -> Workload:
+        """Where to compute this config's results. With `slurm`, a request with
+        missing results is submitted to Slurm by the `auto` executor. The
+        default computes them wherever the request runs."""
+        return Workload()
 
     def check(self, config: ModuleConfig, corpus: Corpus) -> list[str]:
         """Return reasons the config cannot process `corpus`. The default finds none."""
@@ -207,6 +273,11 @@ class Registry:
                         f"module {name!r} field {field_name!r} belongs to more than one sweep"
                     )
                 grouped.add(field_name)
+        for field_name in module.identifying:
+            if field_name not in fields:
+                raise ValueError(
+                    f"module {name!r} identifying field {field_name!r} is not a config field"
+                )
         if not isinstance(module.batch_size, int) or module.batch_size < 1:
             raise ValueError(f"module {name!r} batch_size must be a positive integer")
         for feature in module.features:

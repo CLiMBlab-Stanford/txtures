@@ -26,7 +26,7 @@ from txtures.modules.hf_model import (
 from txtures.modules.lm_scores import LMScores, LMScoresConfig
 from txtures.modules.surprisal import Surprisal, SurprisalConfig, region_tokens
 
-pytestmark = pytest.mark.integration
+pytestmark = [pytest.mark.integration, pytest.mark.heavy]
 
 GPT2_REVISION = "607a30d783dfa663caf39e06633721c8d4cfcd7e"
 PYTHIA_REVISION = "a39f36b100fe8a5377810d56c3f4789b9c53ac42"
@@ -235,6 +235,6 @@ def test_compute_through_the_api_matches_golden_values(tmp_path, monkeypatch):
     config = {"lm_scores": {"model": "gpt2", "revision": GPT2_REVISION}}
     table = tx.compute("surprisal", list(GOLDEN), config=config, device="cpu")
     for document_id, expected in enumerate(GOLDEN.values(), start=1):
-        values = table.loc[table["document_id"] == str(document_id), "surprisal"]
+        values = table.loc[table["document_id"] == str(document_id), "surprisal_gpt2"]
         np.testing.assert_allclose(values, expected, atol=1e-3)
     assert (tmp_path / "cache" / "lm_scores").is_dir()

@@ -1,8 +1,12 @@
 # txtures
 
 txtures computes word- and region-level features of text for psycholinguistic
-research. Its first feature is surprisal from causal language models on the
-Hugging Face hub, with word-boundary correction and user-defined regions.
+research: surprisal from causal language models on the Hugging Face hub,
+with word-boundary correction; unigram and n-gram surprisal from KenLM
+models trained on a corpus such as OpenWebText; word length; part of speech
+and named entities from Stanza; and dependency locality (DLT integration cost) with
+the variants of Shain et al. (2022). Regions are words by default and can be
+defined by the user.
 
 txtures is in early development. Its interfaces will change during the 0.x
 series.
@@ -71,6 +75,13 @@ See the [documentation](https://txtures.readthedocs.io), starting with
 txtures-install/env/bin/python -m pytest -q
 ```
 
+`--fast` skips the tests that load neural models, for quick runs during
+development. On a network file system, `txtures-install/env/bin/python
+tests/local.py -q [--fast]` runs the suite from a copy of the code and
+environment on local disk, which is faster; the environment is copied once
+per host. See
+[Running the tests](https://github.com/CLiMBlab-Stanford/txtures/blob/main/CONTRIBUTING.md#running-the-tests).
+
 See [CONTRIBUTING.md](https://github.com/CLiMBlab-Stanford/txtures/blob/main/CONTRIBUTING.md)
 for contribution, attribution, and release rules, and
 [WRITING_POLICY.md](https://github.com/CLiMBlab-Stanford/txtures/blob/main/WRITING_POLICY.md)
@@ -78,4 +89,4 @@ for documentation style.
 
 ## License
 
-MIT. See [LICENSE](https://github.com/CLiMBlab-Stanford/txtures/blob/main/LICENSE).
+GPL-3.0-or-later. See [LICENSE](https://github.com/CLiMBlab-Stanford/txtures/blob/main/LICENSE).

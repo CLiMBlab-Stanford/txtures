@@ -18,13 +18,23 @@ STRINGS = {0: None, 1: "a", 2: "b", 3: " a", 4: " b"}
 """Decoded text of each token; `None` marks EOS, which ends the text."""
 
 
-def build(directory: Path, style: str = "eos", positions: int = 16, seed: int = 0) -> Path:
+def build(
+    directory: Path,
+    style: str = "eos",
+    positions: int = 16,
+    seed: int = 0,
+    weights: str = "random",
+) -> Path:
     """Save a toy model to `directory`.
 
     `style` sets the tokenizer's special tokens: `eos` (BOS and EOS are the
     same token, as in GPT-2), `bos` (a separate BOS token added by default, as
     in Llama), `no_bos` (EOS only, as in OLMo), `quiet_bos` (a separate BOS
     token that is not added by default), or `bare` (neither token).
+
+    `weights` is `random` (seeded by `seed`) or `formula`, which sets every
+    parameter from its position alone, so the model is the same whatever the
+    PyTorch version's random number generator does. Golden outputs use it.
     """
     vocab = {"<eos>": 0, "a": 1, "b": 2, " a": 3, " b": 4}
     if style in ("bos", "quiet_bos"):
@@ -57,6 +67,14 @@ def build(directory: Path, style: str = "eos", positions: int = 16, seed: int = 
         initializer_range=0.5,
     )
     model = GPT2LMHeadModel(config)
+    if weights == "formula":
+        with torch.no_grad():
+            for index, (_, parameter) in enumerate(model.named_parameters()):
+                where = torch.arange(parameter.numel(), dtype=torch.float64)
+                values = 0.5 * torch.sin(0.731 * where + 1.3 * index)
+                parameter.copy_(values.view_as(parameter).to(parameter.dtype))
+    elif weights != "random":
+        raise ValueError(f"unknown weights {weights!r}")
     directory.mkdir(parents=True, exist_ok=True)
     fast.save_pretrained(directory)
     model.save_pretrained(directory)

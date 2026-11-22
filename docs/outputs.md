@@ -48,7 +48,8 @@ table$surprisal <- as.numeric(table$surprisal)
 
 `NAME.columns.tsv` lists each feature column with its module, feature,
 labels such as `lm_scores.model=gpt2`, and variant identity. `manifest.json`
-records the table's identity, the request, the full resolved config and
+records the table's identity, the request, the workflow behind each column,
+the full resolved config and
 resources of every variant, notes from planning, and the txtures version.
 Use these files, not column names, to find the parameters behind a column.
 
@@ -63,14 +64,15 @@ Tables are views over stored results, so deleting one loses no computation.
 
 ```bash
 txtures status [NAME ...]    # each table: current, stale, or broken
-txtures gc [--dry-run]       # remove stale and broken tables
+txtures gc [--dry-run]       # remove stale and broken tables and store entries
 ```
 
 `status` replans the request each table records. A table is current when
 replanning gives the same identity, stale when the input, the definitions, or
 a resolved revision has changed, and broken when its files are incomplete,
-for example after an interrupted write. `gc` removes stale and broken tables
-and the records of finished Slurm jobs. It never removes stored results.
+for example after an interrupted write. `gc` removes stale and broken tables,
+stale and broken entries of the stores (see [Removing entries](#removing-entries)),
+and the records of finished Slurm jobs.
 
 ## Stores
 
@@ -89,4 +91,30 @@ and renamed into place, so readers never see partial entries, and
 concurrent runs that need the same result compute it once.
 
 Each stored entry has its own `manifest.json`, which records what produced
-it. Nothing removes entries from these stores yet.
+it.
+
+### Removing entries
+
+`txtures gc` removes the entries that no request can use, and lists each
+with its reason and size; with `--dry-run` it only lists them. An entry is
+stale when
+
+- it was computed under an older contract version of its module, or built by
+  an older version of its resource kind;
+- it is an n-gram corpus tokenized by an older version of the tokenizer, or
+  one from a local directory that no longer exists or no longer has the same
+  files (edits to files that remain are not detected, since that would read
+  the whole corpus);
+- it is a tools image of another definition, built by an earlier txtures
+  release; or
+- it was built from, or computed with, a stale entry: models built from a
+  removed corpus, and results computed with a removed model, go with it.
+
+It is broken when a failed write left it, or when it is a lock whose holder
+is gone. Paths that a live lock covers are kept, so `gc` is safe while other
+runs build and compute.
+
+Entries of modules and resource kinds this txtures does not know, and of
+newer versions, are kept, because a newer txtures sharing the stores may use
+them. An older txtures that shares them, however, computes again what `gc`
+removed. A model's files in the Hugging Face cache stay where they are.

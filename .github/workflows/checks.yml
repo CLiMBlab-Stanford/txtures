@@ -28,6 +28,13 @@ jobs:
         run: uv run --frozen ruff format --check src tests .github/workflows
       - name: Check Python style
         run: uv run --frozen ruff check src tests .github/workflows
+      - name: Restore downloaded models
+        # The golden outputs of parse build Stanza's models into the txtures
+        # home's resource store; keep them between runs.
+        uses: actions/cache@v4
+        with:
+          path: ~/txtures-home/resources
+          key: txtures-resources-${{ hashFiles('uv.lock') }}
       - name: Run complete test suite
         run: uv run --frozen pytest -q -m "integration or not integration"
 

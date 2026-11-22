@@ -61,9 +61,15 @@ def make_shared_dir(path: Path) -> None:
 
 
 def _share(path: Path) -> None:
-    """Add group read and write (and search and setgid for directories) to `path`."""
+    """Add group read and write (and search and setgid for directories) to `path`.
+
+    Symbolic links are left alone: changing one's mode would change its
+    target, which may lie outside the entry or not exist on this host.
+    """
     try:
         mode = path.lstat().st_mode
+        if stat.S_ISLNK(mode):
+            return
         extra = stat.S_IRGRP | stat.S_IWGRP
         if stat.S_ISDIR(mode):
             extra |= stat.S_IXGRP | stat.S_ISGID

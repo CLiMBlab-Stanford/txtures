@@ -12,9 +12,11 @@ also the site::
     HOME/cache/         stored per-document results
     HOME/resources/     models and the Hugging Face cache
 
-The home comes from a flag, `TXTURES_HOME`, or the home-path file, a plain
-text file holding only its path, which `txtures site use PATH` writes;
-otherwise it is `~/txtures-home`. Each directory comes from a flag or its
+The home comes from a flag, `TXTURES_HOME`, the installation's home (set by
+`./install --home DIR`, for a checkout that needs its own home, such as one
+developing unreleased code), or the home-path file, a plain text file holding
+only its path, which `txtures site use PATH` writes; otherwise it is
+`~/txtures-home`. Each directory comes from a flag or its
 environment variable, such as `TXTURES_CACHE`, and otherwise from the
 layout above, so the site cannot move it. Every other setting comes from a
 flag, its environment variable, the home's `site.yml`, or a built-in
@@ -77,11 +79,26 @@ SPECS: tuple[SettingSpec, ...] = (
     SettingSpec(
         "execution.executor",
         "choice",
-        "auto submits intensive work to Slurm when it is set up; local or slurm always",
+        "auto submits Slurm workloads when Slurm is set up; local or slurm always",
         choices=("local", "slurm", "auto"),
     ),
     SettingSpec("execution.max_variants", "positive_int", "most variants one module may expand to"),
+    SettingSpec(
+        "execution.runtime",
+        "path",
+        "Apptainer executable for the tools image; unset uses txtures' pinned Apptainer",
+    ),
+    SettingSpec(
+        "corpora.ptb3",
+        "path",
+        "a licensed copy of the Penn Treebank 3 (LDC99T42); needed by gcg_treebank",
+    ),
     SettingSpec("slurm.partition", "text", "partition to submit to; required for slurm"),
+    SettingSpec(
+        "slurm.cpu_partition",
+        "text",
+        "partition for jobs that need no GPU; unset uses slurm.partition",
+    ),
     SettingSpec("slurm.account", "text", "account to charge"),
     SettingSpec("slurm.time_hours", "positive_int", "time limit of each task, in hours"),
     SettingSpec("slurm.memory_gb", "positive_int", "memory of each task, in GB"),
@@ -211,7 +228,10 @@ def default_values() -> dict[str, Any]:
         "execution.device": "auto",
         "execution.executor": "auto",
         "execution.max_variants": 64,
+        "execution.runtime": None,
+        "corpora.ptb3": None,
         "slurm.partition": None,
+        "slurm.cpu_partition": None,
         "slurm.account": None,
         "slurm.time_hours": 24,
         "slurm.memory_gb": 32,
@@ -421,8 +441,13 @@ def resolve_settings(
     user_home: Path | None = None,
     cwd: Path | None = None,
     tolerate_stale: bool = False,
+    installation_home: tuple[Path, str] | None = None,
 ) -> Settings:
     """Resolve every setting from flags, the environment, the home, and defaults.
+
+    `installation_home` is the running installation's home and where it is
+    recorded (`installation.home_of_current`); it comes after flags and
+    `TXTURES_HOME` and before the home-path file.
 
     `flags` maps dotted keys to values given on the command line; `None` values
     are ignored. Relative paths from flags and environment variables resolve
@@ -466,6 +491,8 @@ def resolve_settings(
 
     pointer = home_path_file(env, user_home)
     home = given(SPEC_BY_KEY["home"])
+    if home is None and installation_home is not None:
+        home = Setting("home", installation_home[0], installation_home[1])
     if home is None:
         chosen = _read_home_path(pointer)
         if chosen is not None:
