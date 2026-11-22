@@ -493,3 +493,43 @@ def test_swept_units_reuse_one_lm_scores_variant(env):
 def test_model_without_special_tokens_is_a_planning_problem(env):
     with pytest.raises(DefinitionError, match="declares neither"):
         run(env, "bare")
+
+
+def test_prefetch_retries_without_xet_when_the_hub_refuses_a_read_token(monkeypatch, tmp_path):
+    import huggingface_hub
+    from huggingface_hub import constants
+
+    from txtures.modules import hf_model
+
+    calls = []
+
+    class Api:
+        def list_repo_files(self, model, revision=None, token=None):
+            return ["model.safetensors", "config.json"]
+
+    def snapshot_download(model, **options):
+        calls.append(constants.HF_HUB_DISABLE_XET)
+        if not constants.HF_HUB_DISABLE_XET:
+            raise RuntimeError("404 Not Found for url '.../api/models/gpt2/xet-read-token/abc'")
+
+    monkeypatch.setattr(huggingface_hub, "HfApi", Api)
+    monkeypatch.setattr(huggingface_hub, "snapshot_download", snapshot_download)
+    monkeypatch.setattr(constants, "HF_HUB_DISABLE_XET", False)
+    hf_model.prefetch_weights({"model": "gpt2", "revision": "a" * 40}, tmp_path)
+    assert calls == [False, True] and constants.HF_HUB_DISABLE_XET is False
+
+
+def test_prefetch_does_not_retry_other_failures(monkeypatch, tmp_path):
+    import huggingface_hub
+    import pytest
+
+    from txtures.errors import TxturesError
+    from txtures.modules import hf_model
+
+    class Api:
+        def list_repo_files(self, model, revision=None, token=None):
+            raise RuntimeError("connection refused")
+
+    monkeypatch.setattr(huggingface_hub, "HfApi", Api)
+    with pytest.raises(TxturesError, match="connection refused"):
+        hf_model.prefetch_weights({"model": "gpt2", "revision": "a" * 40}, tmp_path)

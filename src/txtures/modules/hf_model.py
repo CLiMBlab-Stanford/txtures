@@ -251,9 +251,9 @@ def prefetch_weights(
     """
     if is_local(resolved["model"]):
         return
-    from huggingface_hub import HfApi, snapshot_download
+    from huggingface_hub import HfApi, constants, snapshot_download
 
-    try:
+    def fetch() -> None:
         files = HfApi().list_repo_files(
             resolved["model"], revision=resolved["revision"], token=token
         )
@@ -265,6 +265,21 @@ def prefetch_weights(
             token=token,
             allow_patterns=[weights, "*.json", "*.model", "*.txt", "*.tiktoken"],
         )
+
+    try:
+        try:
+            fetch()
+        except Exception as error:
+            # The hub refuses Xet read tokens to anonymous users for renamed
+            # repositories, such as `gpt2` (now `openai-community/gpt2`).
+            # Plain HTTP downloads of the same files still work.
+            if "xet-read-token" not in str(error) or constants.HF_HUB_DISABLE_XET:
+                raise
+            constants.HF_HUB_DISABLE_XET = True
+            try:
+                fetch()
+            finally:
+                constants.HF_HUB_DISABLE_XET = False
     except Exception as error:
         raise TxturesError(
             f"cannot download the files of model {resolved['model']!r}: {error}"
