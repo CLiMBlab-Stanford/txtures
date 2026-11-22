@@ -6,9 +6,9 @@ import shutil
 import time
 
 import numpy as np
+from prsr import splitmerge as sm
+from prsr.em import iterate
 
-from txtures.lvpcfg import splitmerge as sm
-from txtures.lvpcfg.em import iterate
 from txtures.validation import BERKELEY_COMMIT, BERKELEY_REPOSITORY, DATA, Paths, dumps, run
 
 TRAINING_SECTIONS = [f"{n:02d}" for n in range(2, 22)]

@@ -20,8 +20,9 @@ from collections.abc import Iterator, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
+from prsr.gcg import ARTICLE, GCG15_VERSION, ptb_lines, reannotate
+
 from txtures.errors import TxturesError
-from txtures.gcg import ARTICLE, GCG15_VERSION, ptb_lines, reannotate
 from txtures.modules.base import Resource, RunContext, Workload
 from txtures.store import read_json, write_json
 

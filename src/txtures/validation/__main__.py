@@ -33,7 +33,7 @@ def main(argv: list[str] | None = None) -> int:
     command("gcg15-reference", "ModelBlocks' gcg15 pipeline on one WSJ section", section)
     command(
         "gcg15-compare",
-        "txtures.gcg against the reference stages of one section",
+        "prsr.gcg against the reference stages of one section",
         section,
         ("--processes", {"type": int, "default": 8}),
     )

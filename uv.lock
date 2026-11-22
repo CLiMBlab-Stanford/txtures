@@ -970,6 +970,21 @@ wheels = [
 ]
 
 [[package]]
+name = "prsr"
+version = "0.1.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "numpy" },
+    { name = "torch", version = "2.15.0", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(sys_platform == 'darwin' and extra == 'extra-7-txtures-cpu') or (extra == 'extra-7-txtures-cpu' and extra == 'extra-7-txtures-cuda')" },
+    { name = "torch", version = "2.15.0", source = { registry = "https://pypi.org/simple" }, marker = "extra != 'extra-7-txtures-cpu' or extra == 'extra-7-txtures-cuda'" },
+    { name = "torch", version = "2.15.0+cpu", source = { registry = "https://download.pytorch.org/whl/cpu" }, marker = "(sys_platform != 'darwin' and extra == 'extra-7-txtures-cpu') or (extra == 'extra-7-txtures-cpu' and extra == 'extra-7-txtures-cuda')" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/9e/27/8eefe53e1964e430fb9a75f6f6a693309255f4626b44eada250a5b3ad688/prsr-0.1.0.tar.gz", hash = "sha256:2a7da0f1868386ebc3c591c3729f4d579f84b0b3b41667dc06c3001c2bfa5aed", size = 106668, upload-time = "2026-11-22T16:35:24.637Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/c3/72/a7efdae6fde6aec448bd380f97ed46a590198f28ca06b69db3bcd3984165/prsr-0.1.0-py3-none-any.whl", hash = "sha256:d163e5713e8228da81c6caf02757b1774a6269579871edded5b7fead15922ce7", size = 99085, upload-time = "2026-11-22T16:35:23.098Z" },
+]
+
+[[package]]
 name = "pyarrow"
 version = "26.0.1"
 source = { registry = "https://pypi.org/simple" }
@@ -1690,6 +1705,7 @@ dependencies = [
     { name = "huggingface-hub" },
     { name = "numpy" },
     { name = "pandas" },
+    { name = "prsr" },
     { name = "pyarrow" },
     { name = "pydantic" },
     { name = "pyyaml" },
@@ -1717,6 +1733,7 @@ requires-dist = [
     { name = "huggingface-hub", specifier = ">=1,<3" },
     { name = "numpy", specifier = ">=1.26,<3" },
     { name = "pandas", specifier = ">=2.2,<3" },
+    { name = "prsr", specifier = ">=0.1,<0.2" },
     { name = "pyarrow", specifier = ">=15" },
     { name = "pydantic", specifier = ">=2.7,<3" },
     { name = "pyyaml", specifier = ">=6,<7" },

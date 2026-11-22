@@ -7,10 +7,9 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import numpy as np
-
-from txtures.lvpcfg.em import Corpus, Grammar, index_trees
-from txtures.lvpcfg.lexicon import Lexicon
-from txtures.lvpcfg.trees import training_tree
+from prsr.em import Corpus, Rules, index_trees
+from prsr.lexicon import Lexicon
+from prsr.trees import training_tree
 
 
 @dataclass
@@ -31,13 +30,13 @@ class Dump:
     deltas: dict[int, np.ndarray] = field(default_factory=dict)
     pairs: dict[int, np.ndarray] = field(default_factory=dict)
 
-    def grammar(self, unary_keys=None) -> Grammar:
+    def grammar(self, unary_keys=None) -> Rules:
         unary = (
             self.unary
             if unary_keys is None
             else {k: v for k, v in self.unary.items() if k in unary_keys}
         )
-        return Grammar(self.substates, self.binary, unary, self.grammar_smoother)
+        return Rules(self.substates, self.binary, unary, self.grammar_smoother)
 
     def lexicon(self) -> Lexicon:
         c = self.counts

@@ -1,7 +1,7 @@
 """Bracket scores and per-word log-likelihood of parses, with ModelBlocks' evalb as the judge.
 
 Both systems' trees are rebuilt from their best states with
-`txtures.lvpcfg.evaluation.tree_from_states` (equal to ModelBlocks'
+`prsr.evaluation.tree_from_states` (equal to ModelBlocks'
 `tokdecs2linetrees.py`), normalized alike (`for_scoring`), and scored by
 ModelBlocks' copy of evalb with `resource-general/srcmodel/new.prm`, labeled
 and with every label `X` (unlabeled). A failed parse is a flat tree of
@@ -15,8 +15,9 @@ import math
 import re
 from pathlib import Path
 
-from txtures.lvpcfg.evaluation import for_scoring, gold_for_scoring, tree_from_states, unlabeled
-from txtures.lvpcfg.trees import Tree
+from prsr.evaluation import for_scoring, gold_for_scoring, tree_from_states, unlabeled
+from prsr.trees import Tree
+
 from txtures.validation import Paths, run
 
 

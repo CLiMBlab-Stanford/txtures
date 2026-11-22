@@ -6,8 +6,8 @@ import time
 from collections import defaultdict
 
 import torch
+from prsr import leftcorner as lc
 
-from txtures.lvpcfg import leftcorner as lc
 from txtures.validation import DATA, Paths, dumps, run
 
 PROGRAMS = {

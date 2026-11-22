@@ -61,14 +61,15 @@ The trees are made exactly as ModelBlocks makes `%.gcg15.senttrees`:
 6. The original treebank categories (`-f` tags) are removed and each
    attachment operator is moved to the end of its category.
 
-These steps are a Python port of the ModelBlocks scripts
+These steps run in the prsr package (`prsr.gcg`), a Python port of the
+ModelBlocks scripts
 `editabletrees2linetrees.pl`, `make-trees-fixed.pl`, `annotate-gcg15.pl`,
 `killUnaries.pl`, and `makefailtrees.py`, with the rules of the Perl
 scripts kept verbatim. On all 49,208 trees of WSJ sections 00-24 the port
 gives the same output as ModelBlocks at every step.
 
 ```python
-from txtures.gcg import ptb_lines, reannotate
+from prsr.gcg import ptb_lines, reannotate
 
 for line in ptb_lines(open("wsj_0001.mrg").read()):
     print(reannotate(line))

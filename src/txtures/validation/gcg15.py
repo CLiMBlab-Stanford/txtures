@@ -6,8 +6,9 @@ import re
 from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 
-from txtures.gcg import fail_tree, fixes, kill_unaries, rules
-from txtures.gcg.perl import PerlString
+from prsr.gcg import fail_tree, fixes, kill_unaries, rules
+from prsr.gcg.perl import PerlString
+
 from txtures.validation import Paths, run
 
 STAGES = (("fixed", ".fixed.senttrees"), ("annotated", ".annotated"), ("final", ".gcg15.senttrees"))

@@ -7,11 +7,11 @@ import math
 import time
 
 import torch
+from prsr import leftcorner as lc
+from prsr.gcg import ptb_lines
+from prsr.parser import Parser
+from prsr.trees import parse as parse_tree
 
-from txtures.gcg import ptb_lines
-from txtures.lvpcfg import leftcorner as lc
-from txtures.lvpcfg.parser import Parser
-from txtures.lvpcfg.trees import parse as parse_tree
 from txtures.validation import Paths
 
 
@@ -67,16 +67,16 @@ def load_grammar(paths: Paths, grammar: str) -> lc.Pcfg:
     if not grammar.startswith("lvpcfg:"):
         source = paths.berkeley / grammar
         return lc.Pcfg.from_berkeley_text(open(f"{source}.grammar"), open(f"{source}.lexicon"))
+    from prsr import Grammar
+
     from txtures import api
-    from txtures.lvpcfg.resource import load
 
     prefix = grammar.split(":", 1)[1]
     store = api.settings().resource_store / "lvpcfg_grammar"
     found = [p for p in store.glob(f"{prefix[:2]}/{prefix}*") if (p / "manifest.json").exists()]
     if len(found) != 1:
         raise ValueError(f"{len(found)} lvpcfg_grammar entries match {prefix!r} in {store}")
-    trained = load(found[0])
-    return lc.pcfg_from_trained(trained.categories, trained.grammar, trained.lexicon)
+    return Grammar.load(found[0]).pcfg()
 
 
 def parse(
@@ -103,7 +103,7 @@ def parse(
     start = time.time()
     pcfg = load_grammar(paths, grammar)
     model = lc.compile_model(pcfg.without_unaries(), device)
-    parser = Parser(model, beam=beam, lexicon_merge=merge)
+    parser = Parser(model, beam=beam, lexicon=merge)
     synchronize()
     load = time.time() - start
     text = (paths.mb / f"{name}.linetoks").read_text(encoding="utf-8").splitlines()
@@ -122,12 +122,12 @@ def parse(
     )
     results = [
         {
-            "words": words_,
-            "surprisal": result["surprisal"],
-            "preterminals": [model.symbols[s[0]] if s else None for s in result["states"]],
-            "states": result["states"],
+            "words": result.words,
+            "surprisal": result.surprisal,
+            "preterminals": result.preterminals,
+            "states": result.states,
         }
-        for words_, result in zip(sentences, found, strict=True)
+        for result in found
     ]
     suffix = "" if cuda else f".{device}"
     out = paths.mb / f"{name}.{grammar.replace(':', '-')}.txtures-{merge}{suffix}.json"
@@ -186,7 +186,7 @@ def debug_beams(
     source = paths.berkeley / grammar
     pcfg = lc.Pcfg.from_berkeley_text(open(f"{source}.grammar"), open(f"{source}.lexicon"))
     model = lc.compile_model(pcfg.without_unaries(), "cuda")
-    parser = Parser(model, beam=beam, lexicon_merge=merge)
+    parser = Parser(model, beam=beam, lexicon=merge)
     sym = model.symbols
     lines = []
     for words in (paths.mb / f"{name}.linetoks").read_text(encoding="utf-8").split("\n"):
@@ -194,19 +194,19 @@ def debug_beams(
         if not words:
             continue
         history: list = []
-        original_step = parser.step
+        original_step = parser._step
 
         def recording_step(beams, ws, last, history=history, original_step=original_step):
             new, done = original_step(beams, ws, last)
             history.append(new)
             return new, done
 
-        parser.step = recording_step
+        parser._step = recording_step
         parser.parse([words])
-        parser.step = original_step
+        parser._step = original_step
         for word, beams in zip(words, history, strict=True):
             lines.append(f"WORD:{word}")
-            tags, probs = parser.word_entries(word)
+            tags, probs = parser._word_entries(word)
             for t, p in zip(tags.tolist(), probs.tolist(), strict=True):
                 lines.append(f"LEX {sym[t]} {p!r}")
             lines.append(f"BEAM ({word})")
