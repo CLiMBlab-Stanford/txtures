@@ -31,8 +31,10 @@ The two modules share these keys:
 `ngram_surprisal` adds `order` (default 5, at least 2) and `prune` (default
 `[0, 0, 1]`): n-grams seen this many times or fewer are dropped, the first
 value for unigrams, the next for bigrams, and the last for every higher
-order, as `lmplz --prune` reads them. Unigrams cannot be pruned. `dataset`,
-`order`, and `units` are sweepable.
+order, as `lmplz --prune` reads them. Unigrams cannot be pruned. It also adds
+`context`, `sentence` (the default) or `document`, which sets both how the
+model is trained and how text is scored (see Scoring). `dataset`, `order`,
+`context`, and `units` are sweepable.
 
 A local corpus is a directory of Parquet files, one document per row, or
 text files, one document per line:
@@ -56,7 +58,9 @@ split from words, numbers such as `3,500.75` stay whole, and the clitics
 `n't`, `'s`, `'re`, `'ve`, `'ll`, `'d`, and `'m` are split off (*don't*
 becomes *do* *n't*). Documents are split into sentences at `.`, `!`, and
 `?` before a capital letter or digit, except after common abbreviations and
-initials, and at line breaks.
+initials, and at line breaks. This splitter is fast enough for corpora of
+billions of words; the text being scored is split by Stanza instead (see
+Scoring).
 
 KenLM's `lmplz`, run from the [tools image](tools.md), estimates modified
 Kneser-Ney models on it. The n-gram model is stored in KenLM's binary trie
@@ -77,11 +81,14 @@ them ahead of time.
 
 ## Scoring
 
-The text is tokenized the same way as the corpus. Each sentence of the
-input, or each sentence the splitter finds when the input defines none
-(moved to the end of the region it falls in), is scored as its own
-context, starting after `<s>`. The probability of the end of the sentence
-is not counted. A region's surprisal is the sum of its tokens' surprisals,
+The text is tokenized the same way as the corpus. With `context: sentence`,
+the model is trained on one sentence per line, so its n-grams never cross a
+sentence boundary, and each sentence from the [`sentences`](sentences.md)
+module (the input's, or Stanza's split) is scored as its own context,
+starting after `<s>`. With `context: document`, the corpus holds one
+document per line, its sentences joined, so the model and its corpus are
+built separately from the sentence-level ones, and each document is scored
+as one context. The probability of the end of a context is not counted. A region's surprisal is the sum of its tokens' surprisals,
 so punctuation attached to a word counts, as for language-model surprisal.
 
 A token the model has never seen gets the probability of `<unk>`, the same

@@ -4,10 +4,9 @@
 each sentence, and stores one record per syntactic word. It has no feature
 columns; `pos`, `named_entity`, and `dependency_locality` read its results.
 
-Sentences come from the input when it defines them. Otherwise Stanza's
-tokenizer splits the document, and a split that falls inside a region moves
-to the end of that region, so every sentence is a run of whole regions. Each
-sentence is then parsed on its own.
+Sentences come from the `sentences` module: the input's when it defines
+them, otherwise Stanza's split moved to region ends. Each sentence is parsed
+on its own.
 
 Every Stanza token must lie inside one region. Words of a multiword token
 (*don't* → *do* *n't*) share the token's character span.
@@ -25,6 +24,7 @@ from pydantic import Field
 from txtures.corpus import Document
 from txtures.errors import TxturesError
 from txtures.modules.base import Item, Module, ModuleConfig, RunContext, Workload
+from txtures.modules.sentences import sentence_spans
 from txtures.modules.stanza_pipeline import StanzaModels, StanzaPipeline
 
 STRING_FIELDS = ("form", "lemma", "upos", "xpos", "feats", "deprel", "ner")
@@ -73,26 +73,6 @@ def sentence_text(document: Document, start: int, stop: int) -> tuple[int, str]:
     first = document.regions[start][0]
     text = document.text[first : document.regions[stop - 1][1]]
     return first, text.replace("\r", " ").replace("\n", " ")
-
-
-def snap_sentences(document: Document, ends: Sequence[int]) -> list[tuple[int, int]]:
-    """Turn the end offsets of the parser's sentences into runs of whole regions.
-
-    A sentence ending inside a region is extended to that region's end.
-    Returns `(start, stop)` region ranges covering every region in order.
-    """
-    region_ends = [end for _, end in document.regions]
-    stops = set()
-    for end in ends:
-        region = bisect.bisect_left(region_ends, end)
-        stops.add(min(region + 1, len(region_ends)))
-    stops.add(len(region_ends))
-    spans, start = [], 0
-    for stop in sorted(stops):
-        if stop > start:
-            spans.append((start, stop))
-            start = stop
-    return spans
 
 
 def align(
@@ -180,6 +160,7 @@ class Parse(Module):
     name = "parse"
     contract_version = 1
     Config = ParseConfig
+    requires = ("sentences",)
     persist = True
     batch_size = 8
 
@@ -199,12 +180,7 @@ class Parse(Module):
         texts = []
         for item in items:
             document = item.document
-            if document.sentences:
-                spans = [(s.start, s.stop) for s in document.sentences]
-            else:
-                split = models.splitter(document.text)
-                ends = [sentence.tokens[-1].end_char for sentence in split.sentences]
-                spans = snap_sentences(document, ends)
+            spans = sentence_spans(item.upstream["sentences"])
             plans.append(spans)
             texts.extend(sentence_text(document, start, stop)[1] for start, stop in spans)
         parsed = models.parser.bulk_process(texts) if texts else []

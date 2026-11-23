@@ -21,7 +21,7 @@ golden files cannot be updated around a missing version bump.
 
 Most targets run without downloads. The toy language model uses
 `weights="formula"`, so its weights do not depend on PyTorch's random
-number generator. The `parse` and `stanza_pipeline` targets use Stanza's
+number generator. The `sentences`, `parse`, `ngram_surprisal`, and `stanza_pipeline` targets use Stanza's
 English models, built on demand into the configured resource store
 (`resources/store` in the txtures home), so they download only the first
 time on a site. Targets in `HEAVY` load neural models and are skipped by
@@ -463,21 +463,42 @@ def stanza_pipeline_values() -> dict:
     return {"files": files["files"], "kind": resource_record(planned)["kind"]}
 
 
-def parse_values() -> dict:
+def split(document) -> dict:
+    """The `sentences` result for one document, with Stanza's English models."""
+    from txtures.modules import Item
+    from txtures.modules.sentences import Sentences, SentencesConfig
+
+    _, models, context = stanza()
+    items = [Item(document, {}, {"stanza": models})]
+    (result,) = Sentences().run_batch(SentencesConfig(), items, context)
+    return result
+
+
+def _parse_documents() -> dict:
     from txtures.inputs import InputSettings, read_texts
+
+    documents = {}
+    for name, text in PARSE_TEXTS.items():
+        settings = InputSettings(sentence_delimiter="<s>") if isinstance(text, list) else None
+        texts = " <s> ".join(text) if isinstance(text, list) else text
+        (documents[name],) = read_texts({name: texts}, settings or InputSettings()).corpus.documents
+    return documents
+
+
+def sentences_values() -> dict:
+    documents = {**_parse_documents(), **_ngram_documents()}
+    return {name: dict(split(document)) for name, document in documents.items()}
+
+
+def parse_values() -> dict:
     from txtures.modules import Item
     from txtures.modules.parse import Parse, ParseConfig
 
     _, models, context = stanza()
     values = {}
-    for name, text in PARSE_TEXTS.items():
-        settings = InputSettings(sentence_delimiter="<s>") if isinstance(text, list) else None
-        texts = " <s> ".join(text) if isinstance(text, list) else text
-        corpus = read_texts({name: texts}, settings or InputSettings()).corpus
-        (document,) = corpus.documents
-        (result,) = Parse().run_batch(
-            ParseConfig(), [Item(document, {}, {"stanza": models})], context
-        )
+    for name, document in _parse_documents().items():
+        item = Item(document, {"sentences": split(document)}, {"stanza": models})
+        (result,) = Parse().run_batch(ParseConfig(), [item], context)
         values[name] = dict(result)
     return values
 
@@ -589,7 +610,8 @@ def _surprisal_values(module_name: str, **config) -> dict:
     name = "table" if module_name == "unigram_surprisal" else "model"
     values = {}
     for doc_name, doc in _ngram_documents().items():
-        (result,) = module.run_batch(parsed, [Item(doc, {}, {name: loaded})], context)
+        upstream = {"sentences": split(doc)} if module.requires else {}
+        (result,) = module.run_batch(parsed, [Item(doc, upstream, {name: loaded})], context)
         values[doc_name] = dict(module.columns(parsed, doc, result))
     return values
 
@@ -651,6 +673,12 @@ TARGETS: dict[str, Target] = {
     "stanza_pipeline": Target(
         _stanza_version, stanza_pipeline_values, "StanzaPipeline.version", stanza_inputs
     ),
+    "sentences": Target(
+        _module_version("sentences"),
+        sentences_values,
+        "sentences' contract_version",
+        stanza_inputs,
+    ),
     "parse": Target(
         _module_version("parse"), parse_values, "parse's contract_version", stanza_inputs
     ),
@@ -684,7 +712,7 @@ TARGETS: dict[str, Target] = {
         _module_version("ngram_surprisal"),
         ngram_surprisal_values,
         "ngram_surprisal's contract_version",
-        tools_inputs,
+        lambda: {**tools_inputs(), **stanza_inputs()},
     ),
     **{
         name: Target(_module_version(name), compute, f"{name}'s contract_version")
@@ -702,7 +730,10 @@ TARGETS: dict[str, Target] = {
 
 TOOLS = frozenset({"unigram_table", "kenlm_model", "unigram_surprisal", "ngram_surprisal"})
 """Targets that run programs in the tools image."""
-HEAVY = frozenset({"hf_model", "lm_scores", "surprisal", "stanza_pipeline", "parse"}) | TOOLS
+HEAVY = (
+    frozenset({"hf_model", "lm_scores", "surprisal", "stanza_pipeline", "sentences", "parse"})
+    | TOOLS
+)
 """Targets that load neural models or run the tools image; `pytest --fast` skips them."""
 
 

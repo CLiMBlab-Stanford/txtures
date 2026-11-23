@@ -43,19 +43,26 @@ def model_url(resolved: Mapping[str, Any]) -> str:
 
 @dataclass
 class StanzaModels:
-    """A loaded `stanza_pipeline` resource, as `parse` receives it.
+    """A loaded `stanza_pipeline` resource, as `parse` and `sentences` receive it.
 
     `parser` runs every processor on text that is already one sentence.
-    `splitter` runs only tokenization with sentence splitting, and is loaded
-    when first used.
+    `splitter` runs only tokenization with sentence splitting. Each is
+    loaded when first used.
     """
 
     directory: Path
     language: str
     package: str
     device: str
-    parser: Any
+    processors: tuple[str, ...] = PROCESSORS
+    _parser: Any = field(default=None, repr=False)
     _splitter: Any = field(default=None, repr=False)
+
+    @property
+    def parser(self) -> Any:
+        if self._parser is None:
+            self._parser = _pipeline(self, ",".join(self.processors), tokenize_no_ssplit=True)
+        return self._parser
 
     @property
     def splitter(self) -> Any:
@@ -142,12 +149,10 @@ class StanzaPipeline(Resource):
         )
 
     def load(self, resolved: Mapping[str, Any], directory: Path, context: RunContext) -> Any:
-        models = StanzaModels(
+        return StanzaModels(
             directory=directory,
             language=resolved["language"],
             package=resolved["package"],
             device=device(context.device),
-            parser=None,
+            processors=tuple(resolved["processors"]),
         )
-        models.parser = _pipeline(models, ",".join(resolved["processors"]), tokenize_no_ssplit=True)
-        return models

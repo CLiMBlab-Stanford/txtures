@@ -69,9 +69,11 @@ Metadata passes through to each region read from its row. In the first file
 sentence.
 
 A level that neither an ID column nor a delimiter defines is left undefined.
-txtures does not segment text automatically yet, so a module that needs a
-missing level, such as `lm_scores` with `context: sentence`, refuses the
-input.
+Modules that work on sentences find them with the
+[`sentences`](sentences.md) module when the input has none. Sections and
+paragraphs are never found automatically, and `lm_scores` with `context:
+sentence` uses only the input's sentences, so it refuses an input without
+them.
 
 TSV files are read strictly: UTF-8, tab separators, a header on the first
 line, and no quote processing. Quote characters are part of the text, so

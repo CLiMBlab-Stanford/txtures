@@ -4,7 +4,8 @@ import pytest
 
 from txtures.errors import TxturesError
 from txtures.inputs import InputSettings, read_texts
-from txtures.modules.parse import ParsedWord, align, sentence_text, snap_sentences
+from txtures.modules.parse import ParsedWord, align, sentence_text
+from txtures.modules.sentences import snap_sentences
 
 
 def document(texts, settings=None):
@@ -63,3 +64,31 @@ def test_head_outside_the_sentence_is_rejected():
     doc = document("a b")
     with pytest.raises(TxturesError, match="outside its sentence"):
         align(doc, [(0, 2)], [[word(0, 1, 0, "a", 3), word(2, 3, 1, "b", 0)]])
+
+
+class FakeSplitter:
+    """Stands in for Stanza's splitter: ends a sentence after each `.`."""
+
+    def __init__(self):
+        self.calls = 0
+
+    def splitter(self, text):
+        from types import SimpleNamespace
+
+        self.calls += 1
+        ends = [i + 1 for i, c in enumerate(text) if c == "."]
+        token = lambda end: SimpleNamespace(end_char=end)  # noqa: E731
+        return SimpleNamespace(sentences=[SimpleNamespace(tokens=[token(e)]) for e in ends])
+
+
+def test_sentences_use_the_input_or_the_split_moved_to_region_ends():
+    from txtures.modules import Item, RunContext
+    from txtures.modules.sentences import Sentences, SentencesConfig, sentence_spans
+
+    stanza = FakeSplitter()
+    given = document("a b. <s> c d", InputSettings(sentence_delimiter="<s>"))
+    split = document("Hi.there you. Bye now")
+    items = [Item(d, {}, {"stanza": stanza}) for d in (given, split)]
+    results = Sentences().run_batch(SentencesConfig(), items, RunContext())
+    assert [sentence_spans(r) for r in results] == [[(0, 2), (2, 4)], [(0, 1), (1, 2), (2, 4)]]
+    assert stanza.calls == 1

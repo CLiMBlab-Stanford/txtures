@@ -11,6 +11,8 @@
 - [N-gram surprisal](ngram.md): unigram and n-gram surprisal from KenLM
   models trained on a corpus.
 - [Word length](word-length.md): the `word_length` module.
+- [Sentences](sentences.md): the `sentences` module, which splits each
+  document once for every module that works on sentences.
 - [Parsing](parsing.md): the `parse`, `pos`, and `named_entity` modules.
 - [Dependency locality](dependency-locality.md): DLT integration cost, its
   variants, and the analysis of relative clauses.

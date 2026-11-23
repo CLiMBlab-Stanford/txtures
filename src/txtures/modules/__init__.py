@@ -15,6 +15,7 @@ from txtures.modules.named_entity import NamedEntity
 from txtures.modules.ngram import NgramSurprisal, UnigramSurprisal
 from txtures.modules.parse import Parse
 from txtures.modules.pos import Pos
+from txtures.modules.sentences import Sentences
 from txtures.modules.surprisal import Surprisal
 from txtures.modules.word_length import WordLength
 
@@ -25,6 +26,7 @@ REGISTRY = Registry(
         UnigramSurprisal,
         NgramSurprisal,
         WordLength,
+        Sentences,
         Parse,
         Pos,
         NamedEntity,

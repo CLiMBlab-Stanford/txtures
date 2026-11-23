@@ -24,7 +24,12 @@ from txtures.modules.ngram import (
     region_scores,
     write_table,
 )
+from txtures.modules.sentences import sentences_result
 from txtures.ngram_text import sentences, tokenize
+
+
+def upstream(doc, spans):
+    return {"sentences": sentences_result(spans)}
 
 
 def document(text, sentence_delimiter=None):
@@ -68,17 +73,14 @@ def test_sentences_respect_abbreviations_initials_and_lines():
 # Contexts and region sums
 
 
-def test_contexts_follow_input_sentences_or_the_splitter():
+def test_contexts_follow_the_given_sentences():
     doc = document("The cat sat. It ran away.")
-    found = contexts(doc, lowercase=True)
-    assert found == [
+    assert contexts(doc, lowercase=True, spans=[(0, 3), (3, 6)]) == [
         (["the", "cat", "sat", "."], [0, 1, 2, 2]),
         (["it", "ran", "away", "."], [3, 4, 5, 5]),
     ]
-    given = document("The cat sat. <s> It ran.", sentence_delimiter="<s>")
-    assert [tokens for tokens, _ in contexts(given, lowercase=True)] == [
-        ["the", "cat", "sat", "."],
-        ["it", "ran", "."],
+    assert contexts(doc, lowercase=True) == [
+        (["the", "cat", "sat", ".", "it", "ran", "away", "."], [0, 1, 2, 2, 3, 4, 5, 5])
     ]
 
 
@@ -184,6 +186,40 @@ def test_corpus_build_tokenizes_sentences_and_limits_documents(tmp_path, monkeyp
     assert not (built / "parts").exists()
 
 
+def test_document_corpus_puts_each_document_on_one_line(tmp_path):
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "a.txt").write_text("The cat sat. It ran.\nA dog!\n")
+    spec = {
+        "dataset": str(source),
+        "revision": None,
+        "files": "*.txt",
+        "text_field": "text",
+        "max_documents": None,
+        "lowercase": True,
+        "text_version": 1,
+        "context": "document",
+    }
+    resource = NgramCorpus(spec)
+    built = tmp_path / "built"
+    built.mkdir()
+    resource.build(resource.resolve(RunContext()), built, RunContext())
+    with gzip.open(built / ngram.CORPUS_FILE, "rt") as handle:
+        assert handle.read().splitlines() == ["the cat sat . it ran .", "a dog !"]
+
+
+def test_ngram_context_selects_the_corpus_and_the_scored_contexts():
+    sentence = NgramSurprisal().resources(NgramSurprisalConfig())["model"].spec["corpus"]
+    assert "context" not in sentence
+    config = NgramSurprisalConfig(context="document")
+    assert NgramSurprisal().resources(config)["model"].spec["corpus"]["context"] == "document"
+    model = FakeModel()
+    doc = document("The cat sat. The dog sat.")
+    item = Item(doc, upstream(doc, [(0, 3), (3, 6)]), {"model": model})
+    NgramSurprisal().run_batch(config, [item], RunContext())
+    assert model.calls == [[["the", "cat", "sat", ".", "the", "dog", "sat", "."]]]
+
+
 # Configs and modules
 
 
@@ -212,7 +248,8 @@ class FakeModel:
 def test_ngram_module_scores_every_sentence_of_a_batch_in_one_call():
     model = FakeModel()
     docs = [document("The cat sat. The dog sat."), document("A cat.")]
-    items = [Item(d, {}, {"model": model}) for d in docs]
+    spans = [[(0, 3), (3, 6)], [(0, 2)]]
+    items = [Item(d, upstream(d, s), {"model": model}) for d, s in zip(docs, spans, strict=True)]
     results = NgramSurprisal().run_batch(NgramSurprisalConfig(), items, RunContext())
     assert len(model.calls) == 1 and len(model.calls[0]) == 3
     first = NgramSurprisal().columns(NgramSurprisalConfig(), docs[0], results[0])
@@ -321,9 +358,11 @@ def test_kenlm_bigram_surprisal_matches_the_arpa_model(tmp_path):
     reference = read_arpa(arpa)
 
     doc = document("The cat saw the zebra. The horse raced past the barn.")
-    (scored,) = NgramSurprisal().run_batch(config, [Item(doc, {}, {"model": model})], context)
+    spans = [(0, 5), (5, 11)]
+    item = Item(doc, upstream(doc, spans), {"model": model})
+    (scored,) = NgramSurprisal().run_batch(config, [item], context)
     expected = np.zeros(len(doc.regions))
-    for tokens, regions in contexts(doc, lowercase=True):
+    for tokens, regions in contexts(doc, lowercase=True, spans=spans):
         for region, value in zip(regions, reference_bigram(reference, tokens), strict=True):
             expected[region] += -value * math.log(10)
     assert scored["nats"] == pytest.approx(expected, rel=1e-5)

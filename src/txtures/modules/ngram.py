@@ -14,9 +14,9 @@ it:
 - `kenlm_model`: a model of order 2 or more, pruned as configured, stored in
   KenLM's binary trie format and queried with KenLM's `query`.
 
-The target text is tokenized the same way. Each sentence of the input, or
-each sentence `ngram_text` finds when the input defines none (moved to
-region boundaries), is scored as its own context, starting from `<s>`; the
+The target text is tokenized the same way. Each sentence from the
+`sentences` module (the input's, or Stanza's split moved to region
+boundaries) is scored as its own context, starting from `<s>`; the
 probability of `</s>` is not counted. A region's surprisal is the sum of
 its tokens' surprisals, and its out-of-vocabulary count the number of its
 tokens that the model does not know, which all get the probability of
@@ -47,7 +47,8 @@ from pydantic import Field, model_validator
 from txtures.corpus import Document
 from txtures.errors import TxturesError
 from txtures.modules.base import Item, Module, ModuleConfig, Resource, RunContext, Workload
-from txtures.ngram_text import NGRAM_TEXT_VERSION, sentence_ends, sentences, tokenize
+from txtures.modules.sentences import sentence_spans
+from txtures.ngram_text import NGRAM_TEXT_VERSION, sentences, tokenize
 from txtures.store import write_json
 
 CORPUS_FILE = "corpus.txt.gz"
@@ -133,8 +134,12 @@ def _count_documents(path: Path) -> int:
 
 
 def _prepare_file(job: tuple) -> tuple[int, int, int]:
-    """Tokenize one corpus file into a gzipped part. Returns documents, sentences, tokens."""
-    source, text_field, limit, lowercase, output = job
+    """Tokenize one corpus file into a gzipped part. Returns documents, lines, tokens.
+
+    A line holds one sentence, or with `context` `document` one document's
+    sentences joined.
+    """
+    source, text_field, limit, lowercase, context, output = job
     if isinstance(source, tuple):
         from huggingface_hub import hf_hub_download
 
@@ -149,8 +154,10 @@ def _prepare_file(job: tuple) -> tuple[int, int, int]:
             if limit is not None and counts[0] >= limit:
                 break
             counts[0] += 1
-            for sentence in sentences(document):
-                tokens = tokenize(sentence, lowercase)
+            lines = [tokenize(sentence, lowercase) for sentence in sentences(document)]
+            if context == "document":
+                lines = [[token for line in lines for token in line]]
+            for tokens in lines:
                 if tokens:
                     out.write(" ".join(tokens) + "\n")
                     counts[1] += 1
@@ -159,13 +166,15 @@ def _prepare_file(job: tuple) -> tuple[int, int, int]:
 
 
 class NgramCorpus(Resource):
-    """A tokenized corpus, one sentence per line, in `corpus.txt.gz`.
+    """A tokenized corpus, one sentence or one document per line, in `corpus.txt.gz`.
 
     Spec keys: `dataset` (a Hugging Face dataset, or the absolute path of a
     local directory), `revision`, `files` (a glob of the files to use),
     `text_field` (the Parquet column), `max_documents` (the first so many
-    documents, in file order; unset for all), `lowercase`, and
-    `text_version`. Resolving fixes the revision (a commit, or a digest of a
+    documents, in file order; unset for all), `lowercase`, `text_version`,
+    and `context`: `document` for one document per line. Without it each
+    line is a sentence, so corpora built before the key existed keep their
+    identity. Resolving fixes the revision (a commit, or a digest of a
     local directory's files) and the list of files.
     """
 
@@ -238,7 +247,14 @@ class NgramCorpus(Resource):
         parts = directory / "parts"
         parts.mkdir()
         jobs = [
-            (source, resolved["text_field"], limit, resolved["lowercase"], parts / f"{i:05d}.gz")
+            (
+                source,
+                resolved["text_field"],
+                limit,
+                resolved["lowercase"],
+                resolved.get("context", "sentence"),
+                parts / f"{i:05d}.gz",
+            )
             for i, (source, limit) in enumerate(zip(sources, limits, strict=True))
             if limit is None or limit > 0
         ]
@@ -246,7 +262,7 @@ class NgramCorpus(Resource):
         with (directory / CORPUS_FILE).open("wb") as out:
             # Concatenated gzip members are one valid gzip stream.
             for job in jobs:
-                with Path(job[4]).open("rb") as part:
+                with Path(job[-1]).open("rb") as part:
                     shutil.copyfileobj(part, out, 1 << 20)
         shutil.rmtree(parts)
         documents, sentence_count, tokens = (sum(c[i] for c in counts) for i in range(3))
@@ -269,7 +285,7 @@ def _run_jobs(jobs: list[tuple], workers: int, parts: Path) -> list[tuple[int, i
     if workers == 1:
         return [_prepare_file(job) for job in jobs]
     listing = parts / "jobs.json"
-    listing.write_text(json.dumps([[str(j[4]), *_portable(j)] for j in jobs]), encoding="utf-8")
+    listing.write_text(json.dumps([[str(j[-1]), *_portable(j)] for j in jobs]), encoding="utf-8")
     processes = [
         subprocess.Popen(
             [sys.executable, "-m", "txtures.ngram_worker", str(listing), str(k), str(workers)]
@@ -279,26 +295,27 @@ def _run_jobs(jobs: list[tuple], workers: int, parts: Path) -> list[tuple[int, i
     failed = [p.args for p in processes if p.wait() != 0]
     if failed:
         raise TxturesError(f"{len(failed)} of {workers} corpus workers failed; see their output")
-    return [tuple(json.loads(Path(f"{job[4]}.json").read_text())) for job in jobs]
+    return [tuple(json.loads(Path(f"{job[-1]}.json").read_text())) for job in jobs]
 
 
 def _portable(job: tuple) -> list[Any]:
-    source, text_field, limit, lowercase, _ = job
+    source, text_field, limit, lowercase, context, _ = job
     source = list(source) if isinstance(source, tuple) else source
     if isinstance(source, list):
         source = [str(v) if isinstance(v, Path) else v for v in source]
-    return [source, text_field, limit, lowercase]
+    return [source, text_field, limit, lowercase, context]
 
 
 def _worker(listing: Path, index: int, workers: int) -> None:
     """Prepare this worker's share of the jobs in `listing`, recording each part's counts."""
-    for position, (output, source, text_field, limit, lowercase) in enumerate(
+    for position, (output, source, text_field, limit, lowercase, context) in enumerate(
         json.loads(listing.read_text(encoding="utf-8"))
     ):
         if position % workers != index:
             continue
         source = tuple(source) if isinstance(source, list) else source
-        counts = _prepare_file((source, text_field, limit, lowercase, Path(output)))
+        job = (source, text_field, limit, lowercase, context, Path(output))
+        counts = _prepare_file(job)
         Path(f"{output}.json").write_text(json.dumps(counts), encoding="utf-8")
 
 
@@ -556,18 +573,17 @@ class UnigramTable(Resource):
 # Region scores
 
 
-def contexts(document: Document, lowercase: bool) -> list[tuple[list[str], list[int]]]:
+def contexts(
+    document: Document, lowercase: bool, spans: Sequence[tuple[int, int]] | None = None
+) -> list[tuple[list[str], list[int]]]:
     """The token contexts of a document: for each sentence, its tokens and each token's region.
 
-    Sentences are the input's, or those `ngram_text` finds, moved to region
-    boundaries.
+    `spans` are the sentences' region ranges, as the `sentences` module gives
+    them. Without them the document is one context, as for `context:
+    document` and for unigram scores, which do not depend on context.
     """
-    from txtures.modules.parse import snap_sentences
-
-    if document.sentences:
-        spans = [(s.start, s.stop) for s in document.sentences]
-    else:
-        spans = snap_sentences(document, sentence_ends(document.text))
+    if spans is None:
+        spans = [(0, len(document.regions))]
     found = []
     for start, stop in spans:
         tokens, regions = [], []
@@ -649,6 +665,12 @@ class NgramSurprisalConfig(CorpusConfig):
     order: int = Field(default=5, ge=2)
     """The n-gram order."""
 
+    context: Literal["sentence", "document"] = "sentence"
+    """What one context is, in the training corpus and in the scored text:
+    each sentence, starting after `<s>`, or each whole document. The model is
+    trained on lines of the same kind, so its n-grams cross sentence
+    boundaries only with `document`."""
+
     prune: tuple[int, ...] = (0, 0, 1)
     """Pruning thresholds of orders 1, 2, ...: n-grams seen this many times or
     fewer are dropped, and the last threshold applies to higher orders, as in
@@ -704,10 +726,16 @@ class NgramSurprisal(Module):
     """Compute each region's n-gram surprisal under a corpus's KenLM model."""
 
     name = "ngram_surprisal"
-    contract_version = 1
+    contract_version = 2
     Config = NgramSurprisalConfig
+    requires = ("sentences",)
     features = ("ngram_surprisal", "ngram_oov")
-    sweeps = {"dataset": CORPUS_SWEEP, "order": ("order",), "units": ("units",)}
+    sweeps = {
+        "dataset": CORPUS_SWEEP,
+        "order": ("order",),
+        "context": ("context",),
+        "units": ("units",),
+    }
     identifying = ("dataset",)
     persist = True
     batch_size = 256
@@ -716,8 +744,11 @@ class NgramSurprisal(Module):
         return Workload(slurm=True, ngpus=0)
 
     def resources(self, config: NgramSurprisalConfig):
+        corpus = config.corpus_spec()
+        if config.context == "document":
+            corpus["context"] = "document"
         spec = {
-            "corpus": config.corpus_spec(),
+            "corpus": corpus,
             "order": config.order,
             "prune": list(config.prune[: config.order]),
             "discount_fallback": config.discount_fallback,
@@ -728,7 +759,16 @@ class NgramSurprisal(Module):
         if not items:
             return []
         model: KenLMQuery = items[0].resources["model"]
-        found = [contexts(item.document, config.lowercase) for item in items]
+        found = [
+            contexts(
+                item.document,
+                config.lowercase,
+                None
+                if config.context == "document"
+                else sentence_spans(item.upstream["sentences"]),
+            )
+            for item in items
+        ]
         scored = model.score([tokens for document in found for tokens, _ in document])
         results, position = [], 0
         for item, document in zip(items, found, strict=True):

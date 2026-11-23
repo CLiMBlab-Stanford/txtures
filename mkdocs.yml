@@ -15,6 +15,7 @@ nav:
   - Surprisal: surprisal.md
   - N-gram surprisal: ngram.md
   - Word length: word-length.md
+  - Sentences: sentences.md
   - Parsing: parsing.md
   - Dependency locality: dependency-locality.md
   - GCG treebank: gcg.md

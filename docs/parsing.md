@@ -19,9 +19,8 @@ commit hash when a run is planned, and the hash is part of the results'
 identity, as for a language model's revision. The models are stored in the
 `resources` directory.
 
-Parsing needs sentences. When the input defines them, each is parsed on its
-own. Otherwise Stanza splits each document, and a split that falls inside a
-region moves to the end of that region. Every Stanza token must lie inside
+Each sentence from the [`sentences`](sentences.md) module, the input's or
+Stanza's split, is parsed on its own. Every Stanza token must lie inside
 one region; a token that spans two regions is an error. Stanza splits some
 tokens into several syntactic words, such as *don't* into *do* and *n't*;
 the words share the token's region.

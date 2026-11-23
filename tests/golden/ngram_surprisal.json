@@ -1,5 +1,17 @@
 {
  "inputs": {
+  "commit": "03960e981a2e7e86151a898a8e675d2026cecc73",
+  "language": "en",
+  "package": "default",
+  "processors": [
+   "tokenize",
+   "mwt",
+   "pos",
+   "lemma",
+   "depparse",
+   "ner"
+  ],
+  "resources_version": "1.15.0",
   "tools_definition_sha256": "0b9b796b53b865fba859d8eada84381d112a151355d93dda06261f86f5da6a5f"
  },
  "target": "ngram_surprisal",
@@ -59,5 +71,5 @@
    ]
   }
  },
- "version": 1
+ "version": 2
 }
